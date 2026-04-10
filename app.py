@@ -116,6 +116,28 @@ def load_view(conn, view_name):
     col_str = ", ".join(f'"{c}"' for c in safe)
     return pd.read_sql_query(f'SELECT {col_str} FROM "{view_name}"', conn)
 
+def get_uploaded_data(uploaded_file):
+    cache_key = (uploaded_file.name, getattr(uploaded_file, "size", None))
+    if st.session_state.get("uploaded_cache_key") == cache_key:
+        return st.session_state["mlos_df"], st.session_state["takeoff_df"]
+
+    conn, tmp_path = load_sqlite(uploaded_file)
+    try:
+        mlos_df    = load_view(conn, MLOS_VIEW)
+        takeoff_df = load_view(conn, TAKEOFF_VIEW)
+    finally:
+        conn.close()
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    st.session_state["uploaded_cache_key"] = cache_key
+    st.session_state["mlos_df"] = mlos_df
+    st.session_state["takeoff_df"] = takeoff_df
+    return mlos_df, takeoff_df
+
+
 def pct(v, t): return f"{v/t*100:.1f}%" if t else "0%"
 def is_uuid(x): return bool(UUID_RE.match(str(x).strip())) if x and str(x) != "nan" else False
 def is_editor(x): return bool(EDITOR_RE.match(str(x).strip())) if x and str(x) != "nan" else False
@@ -455,7 +477,7 @@ def build_excel_report(filename, mlos_checks, mlos_detail, tp_checks, tp_detail,
 with st.sidebar:
     st.markdown("### 📁 Upload SQLite File")
     uploaded = st.file_uploader(
-        "", type=["sqlite","db","sqlite3"],
+        "Upload SQLite or DB file", type=["sqlite","db","sqlite3"],
         key="sqlite_upload", label_visibility="collapsed",
     )
     st.markdown("---")
@@ -521,11 +543,7 @@ This tool runs automated Quality Control on MLOS checkout SQLite files.
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────────
 with st.spinner("Loading SQLite file…"):
     try:
-        conn, tmp_path = load_sqlite(uploaded)
-        mlos_df    = load_view(conn, MLOS_VIEW)
-        takeoff_df = load_view(conn, TAKEOFF_VIEW)
-        conn.close()
-        os.unlink(tmp_path)
+        mlos_df, takeoff_df = get_uploaded_data(uploaded)
     except Exception as e:
         st.error(f"❌ Failed to load file: {e}")
         st.stop()
@@ -533,9 +551,21 @@ with st.spinner("Loading SQLite file…"):
 filename = uploaded.name
 
 # ─── RUN QC ───────────────────────────────────────────────────────────────────────
-with st.spinner("Running QC checks…"):
-    mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
-    tp_checks,   tp_detail   = run_takeoff_qc(takeoff_df, mlos_df)
+qc_cache_key = (filename, getattr(uploaded, "size", None))
+if st.session_state.get("qc_cache_key") == qc_cache_key:
+    mlos_checks = st.session_state["mlos_checks"]
+    mlos_detail = st.session_state["mlos_detail"]
+    tp_checks   = st.session_state["tp_checks"]
+    tp_detail   = st.session_state["tp_detail"]
+else:
+    with st.spinner("Running QC checks…"):
+        mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
+        tp_checks,   tp_detail   = run_takeoff_qc(takeoff_df, mlos_df)
+    st.session_state["qc_cache_key"] = qc_cache_key
+    st.session_state["mlos_checks"] = mlos_checks
+    st.session_state["mlos_detail"] = mlos_detail
+    st.session_state["tp_checks"]   = tp_checks
+    st.session_state["tp_detail"]   = tp_detail
 
 all_checks      = mlos_checks + tp_checks
 n_fail          = sum(1 for c in all_checks if "FAIL" in c["Status"])
