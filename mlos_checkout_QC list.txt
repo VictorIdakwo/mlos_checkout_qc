@@ -1,0 +1,28 @@
+﻿MLoS Table
+1. All takeoffpoint coordinates must be located within their administrative ward boundary for planfeld to generate a plan for the settlements of the wards. Therefore, all administrative wards must have a takeoffpoint 
+2. takeoffpoint in the MLoS table should be = to the name in the takeoffpoint table
+3. takeoffpoint_code in the MLoS table should be = to the code in the takeoffpoint table
+4. ward_code in the MLoS table should be = to the wardcode in the takeoffpoint table
+5. Only primarysettlement_name, alternate_name, and reasons_for_inaccessibility can be null; all other attributes must not be null
+6. security compromised = N or Y only
+7. accessibility status = Fully Accessible, Partially Accessible, or Inaccessible
+8. Partially Accessible and Inaccessible must have reasons_for_inaccessible
+9. habitation status = Abandoned, Migrated, Inhabited, or Partially Inhabited
+10. set_target and number_of_houses should not be higher than the set_population
+11. team_code can be NA if not available
+12. day of activity = 1or 1_2 or 1_2_3 or 1_2_3_4 or 2 or 2_3 or 2_3_4 or 3, or 3_4 or 4, or it can be NA if not available
+13. urban, rural, and scattered = N or Y, it must not be null (for now, a settlement can only be either urban, rural or scattered)
+   1. A settlement cannot be both urban and rural
+   2. A rural settlement can be scattered or not, but urban areas can’t be categorised as scattered
+14. The rest of the profile = N or Y, but can be NA if not available
+15. source = MLoS
+16. editor = your name in this format (firstnme.surname) all lowercase
+17. globalid = uuid
+18. fc_globalid = uuid(just generate a new uuid for this), we plan to remove this field, not needed
+19. settlementarea_globlid = uuid (just generate a new uuid for this), we plan to remove this field, not needed
+Takeoffpoint Table
+1. All takeoffpoint coordinates must be located within their administrative ward boundary for planfeld to generate a plan for the settlements of the wards. Therefore, all administrative wards must have a takeoffpoint 
+2. The name in the takeoffpoint table should be = to the takeoffpoint in the MLoS table 
+3. The code in the takeoffpoint table must be = to the takeoffpoint_code in the MLoS table
+4. The wardcode in the takeoffpoint table must be = to ward_code in the MLoS table
+5. globalid = uuid
