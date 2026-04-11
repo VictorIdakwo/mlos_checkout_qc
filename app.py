@@ -655,7 +655,8 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             "globalid must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
             ~vec_is_uuid(mlos["globalid"]), ["globalid"])
 
-    return checks, pd.concat(details, ignore_index=True) if details else pd.DataFrame()
+    # Keep original mlos_df indices so make_longitudinal_df can match failing rows correctly
+    return checks, pd.concat(details) if details else pd.DataFrame()
 
 
 # ─── QC Engine — Takeoffpoint ────────────────────────────────────────────────────
@@ -1135,7 +1136,7 @@ with tab2:
 
         st.markdown("---")
         st.markdown("**📋 MLoS Issue Rows — Longitudinal View**")
-        st.caption("One row per settlement. Each QC rule appears as a column: **True** = error on that row, **False** = no error.")
+        st.caption("One row per settlement. Each QC rule appears as a column: **Yes** = rule error present, **No** = no error.")
 
         long_df = make_longitudinal_df(mlos_df, mlos_checks, mlos_detail)
         if not long_df.empty:
@@ -1143,7 +1144,7 @@ with tab2:
             # Convert booleans to emoji strings for visual clarity — avoids Styler compatibility issues
             display_df = long_df.copy()
             for col in rule_flag_cols:
-                display_df[col] = display_df[col].map(lambda v: "❌ Error" if v is True else ("✅ OK" if v is False else v))
+                display_df[col] = display_df[col].map(lambda v: "Yes" if v is True else ("No" if v is False else v))
             st.dataframe(display_df, use_container_width=True, hide_index=True, height=350)
 
         long_xlsx = build_longitudinal_mlos(mlos_df, mlos_checks, mlos_detail)
