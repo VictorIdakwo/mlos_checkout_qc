@@ -394,25 +394,20 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # ── Pre-filter boundary reference to only the state_codes and lga_codes
-    # present in the uploaded file — shrinks the search space significantly
+    # ── Pre-filter boundary reference by state_code only.
+    # lga_code is intentionally NOT used for filtering — lga_code formats can
+    # differ between the uploaded file and the reference (e.g. "001" vs "1"),
+    # which caused valid ward codes to be dropped and incorrectly flagged by B1.
     filtered_ref  = ref_df.copy()  if not ref_df.empty  else ref_df
     filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
 
-    if not ref_df.empty:
-        if "state_code" in mlos.columns and "state_code" in ref_df.columns:
-            mlos_states = set(mlos["state_code"].dropna().astype(str).str.strip())
-            filtered_ref  = filtered_ref[filtered_ref["state_code"].astype(str).str.strip().isin(mlos_states)]
+    if not ref_df.empty and "state_code" in mlos.columns and "state_code" in ref_df.columns:
+        mlos_states  = set(mlos["state_code"].dropna().astype(str).str.strip())
+        filtered_ref = filtered_ref[filtered_ref["state_code"].astype(str).str.strip().isin(mlos_states)]
+        if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns:
             filtered_bbox = filtered_bbox[
                 filtered_bbox["ward_code"].isin(set(filtered_ref["ward_code"].dropna()))
-            ] if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns else filtered_bbox
-
-        if "lga_code" in mlos.columns and "lga_code" in ref_df.columns:
-            mlos_lgas = set(mlos["lga_code"].dropna().astype(str).str.strip())
-            filtered_ref  = filtered_ref[filtered_ref["lga_code"].astype(str).str.strip().isin(mlos_lgas)]
-            filtered_bbox = filtered_bbox[
-                filtered_bbox["ward_code"].isin(set(filtered_ref["ward_code"].dropna()))
-            ] if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns else filtered_bbox
+            ]
 
     # B1 — ward_code must exist in the (pre-filtered) boundary reference
     if not filtered_ref.empty and "ward_code" in filtered_ref.columns:

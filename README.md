@@ -13,10 +13,11 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
   - 🏘️ **MLoS Rules** — 15+ data integrity and cross-table checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
   - 🗺️ **Boundary Checks** — ward code and coordinate validation against admin ward boundary reference
+- **🔧 Auto Correct tab** — automatically fixes common data issues and exports a corrected file
 - **Pass Rate % and Fail Rate %** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
 - Downloadable Excel reports per QC layer and per rule
-- **MLoS Issues — Longitudinal View** — one row per settlement, True/False per rule column, colour-coded and downloadable
+- **MLoS Issues — Longitudinal View** — one row per settlement, Yes/No per rule column, downloadable
 - **Generate Report tab** — full QC verdict (CLEAN / FAILING) + downloadable 7-sheet Excel report
 - **Send QC Email** — sends summary to the data team on demand
 
@@ -34,13 +35,27 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 
 ---
 
+## Tab Overview
+
+| Tab | Contents |
+|-----|----------|
+| 📊 QC Summary | Pass/fail status per rule, failing row counts, Pass Rate %, Fail Rate % |
+| 🔧 Auto Correct | Automated data fixes with correction log + corrected file download |
+| 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule column) |
+| 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
+| 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + download |
+| 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
+| 📄 Generate Report | Full QC verdict, 7-sheet Excel report download, and Send Email button |
+
+---
+
 ## Process & Procedure
 
 ### 1. Upload Your File
 
 Use the **sidebar uploader** to upload your MLOS checkout file. The tool accepts `.sqlite`, `.db`, `.csv`, `.xlsx`, and `.xls` files.
 
-Once uploaded, the app immediately begins all 4 QC layers in sequence. A **labelled progress bar** tracks each step:
+Once uploaded, the app runs all 4 QC layers in sequence. A **labelled progress bar** tracks each step:
 
 | Step | Progress | Layer |
 |------|----------|-------|
@@ -98,7 +113,25 @@ The first QC layer checks whether the uploaded file contains all required column
 
 ---
 
-### 3. MLoS QC Checks (Rules 2–17)
+### 3. Auto Correct
+
+After reviewing the QC Summary, go to the **🔧 Auto Correct** tab to apply automatic fixes to the uploaded MLoS data.
+
+Three corrections are applied automatically:
+
+| # | Field(s) | Correction |
+|---|----------|------------|
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani` | NULL values replaced with `NA` |
+| 2 | `reasons_for_inaccessibility` | Filled with `NA` where `accessibility_status` is `Fully Accessible` and the field is NULL |
+| 3 | `globalid` | Leading/trailing braces `{}` stripped; any still-invalid UUID replaced with a freshly generated UUID |
+
+The tab displays a **correction log** (column, correction type, rows fixed). A **Download Corrected MLoS (Excel)** button exports the fixed dataset as `{filename}_corrected.xlsx`.
+
+> If no corrections are needed, a green "No corrections needed" message is shown.
+
+---
+
+### 4. MLoS QC Checks (Rules 2–17)
 
 Data integrity rules applied to the MLoS table.
 
@@ -122,7 +155,7 @@ Data integrity rules applied to the MLoS table.
 
 ---
 
-### 4. Takeoffpoint QC Checks (Rules TP2–TP5)
+### 5. Takeoffpoint QC Checks (Rules TP2–TP5)
 
 Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
@@ -137,7 +170,7 @@ Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
 ---
 
-### 5. Boundary Checks (Rules B1–B2)
+### 6. Boundary Checks (Rules B1–B2)
 
 Spatial and reference validation against the admin ward boundary dataset (9,410 wards).
 
@@ -146,26 +179,13 @@ Spatial and reference validation against the admin ward boundary dataset (9,410 
 | B1 | Ward Code — Boundary Reference | `ward_code` must exist in the admin ward boundary reference dataset |
 | B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
 
-**Performance optimisation:** The boundary search is pre-filtered by `state_code` and `lga_code` from the uploaded file, so only the relevant subset of the 9,410-ward reference is searched. This significantly reduces lookup time for single-state or single-LGA files.
+**Performance optimisation:** The boundary search is pre-filtered by `state_code` from the uploaded file, reducing the search space to only the wards within the relevant state(s).
+
+> `lga_code` is intentionally excluded from the pre-filter — lga_code formats can differ between the uploaded file and the reference, which previously caused valid ward codes to be incorrectly flagged by B1.
 
 Reference files bundled in the repo:
 - `ward_boundary_ref.csv` — 9,410 ward codes with state, LGA, and ward metadata
 - `ward_boundary_bbox.csv` — bounding box (min/max lon/lat) per ward code extracted from the admin boundary dataset
-
----
-
-### 6. Review Results
-
-Results are displayed across tabs:
-
-| Tab | Contents |
-|-----|----------|
-| 📊 QC Summary | Pass/fail status per rule with failing row counts, percentages, Pass Rate %, Fail Rate % |
-| 🏘️ MLoS Issues | Row-level drilldown per failing rule + **Longitudinal View** (one row per settlement, True/False per rule column) + combined download |
-| 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + combined download |
-| 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + combined download |
-| 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
-| 📄 Generate Report | Full QC verdict, downloadable 7-sheet Excel report, and Send Email button |
 
 ---
 
@@ -175,9 +195,9 @@ The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settle
 
 - Each row represents one settlement
 - Each QC rule appears as a column (e.g. `Rule_6 | Security Compromised Y/N`)
-- **True** (red) = that settlement failed the rule
-- **False** (green) = no error on that rule for that row
-- Click **Download MLoS Issues — Longitudinal (Excel)** to export the colour-coded workbook
+- **Yes** = error present on that row for that rule
+- **No** = no error on that rule for that row
+- Click **Download MLoS Issues — Longitudinal (Excel)** to export the workbook
 
 ---
 
@@ -207,11 +227,13 @@ Click **Send QC Email** in the Generate Report tab to notify the data team.
 SMTP credentials must be configured in Streamlit secrets:
 
 ```toml
-smtp_host = "smtp.gmail.com"
+smtp_host = "smtp.office365.com"   # or smtp.gmail.com for Gmail
 smtp_port = 587
 smtp_user = "your@email.com"
 smtp_pass = "your-app-password"
 ```
+
+> **Note:** `smtp_host` must be the mail server hostname — not an email address.
 
 ---
 
