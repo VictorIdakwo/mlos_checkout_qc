@@ -7,17 +7,17 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 ## Features
 
 - Upload `.sqlite`, `.csv`, `.xlsx`, or `.xls` checkout files
+- **🔧 Auto Correct** runs before every QC — fixes common data issues and exports a corrected file
 - **Step-by-step progress bar** displayed during QC run
 - **4 QC Layers** run automatically on upload:
-  - 🔎 **Schema Alignment** — verifies all required columns are present before running data checks
+  - 🔎 **Schema Alignment** — verifies all required columns are present
   - 🏘️ **MLoS Rules** — 15+ data integrity and cross-table checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
-  - 🗺️ **Boundary Checks** — ward code and coordinate validation against admin ward boundary reference
-- **🔧 Auto Correct tab** — automatically fixes common data issues and exports a corrected file
+  - 🗺️ **Boundary Checks** — ward code and coordinate validation against 9,410-ward admin boundary reference, filtered by `state_name`
 - **Pass Rate % and Fail Rate %** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
-- Downloadable Excel reports per QC layer and per rule
 - **MLoS Issues — Longitudinal View** — one row per settlement, Yes/No per rule column, downloadable
+- **Boundary Issues** — includes reference ward code, ward name, LGA, and state columns for comparison
 - **Generate Report tab** — full QC verdict (CLEAN / FAILING) + downloadable 7-sheet Excel report
 - **Send QC Email** — sends summary to the data team on demand
 
@@ -39,11 +39,11 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 
 | Tab | Contents |
 |-----|----------|
-| 🔧 Auto Correct | Automated data fixes with correction log + corrected file download |
-| 📊 QC Summary | Pass/fail status per rule, failing row counts, Pass Rate %, Fail Rate % |
-| 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule column) |
+| 🔧 Auto Correct | Correction log + full corrected MLoS download (always available) |
+| 📊 QC Summary | Pass/fail per rule, failing row counts, Pass Rate %, Fail Rate % |
+| 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule) |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
-| 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + download |
+| 🗺️ Boundary Issues | Ward code and coordinate failures with boundary reference comparison columns |
 | 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
 | 📄 Generate Report | Full QC verdict, 7-sheet Excel report download, and Send Email button |
 
@@ -55,10 +55,15 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 
 Use the **sidebar uploader** to upload your MLOS checkout file. The tool accepts `.sqlite`, `.db`, `.csv`, `.xlsx`, and `.xls` files.
 
-Once uploaded, the app runs all 4 QC layers in sequence. A **labelled progress bar** tracks each step:
+Once uploaded, the app:
+1. Runs **Auto Correct** on the MLoS data (pre-step before QC)
+2. Runs all 4 QC layers on the corrected data in sequence
+
+A **labelled progress bar** tracks each QC step:
 
 | Step | Progress | Layer |
 |------|----------|-------|
+| Pre-step | — | 🔧 Auto Correct |
 | Step 1 / 4 | 5% → 25% | 🔎 Schema Alignment |
 | Step 2 / 4 | 26% → 50% | 🏘️ MLoS Rules |
 | Step 3 / 4 | 51% → 75% | 📍 Takeoffpoint Rules |
@@ -66,20 +71,41 @@ Once uploaded, the app runs all 4 QC layers in sequence. A **labelled progress b
 
 ---
 
-### 2. Schema Alignment (Rules S1–S2)
+### 2. Auto Correct (Pre-step)
 
-The first QC layer checks whether the uploaded file contains all required columns **before** running any data checks. Unlike a hard gate, schema results are reported as part of the QC summary so the process continues and shows all issues at once.
+Auto Correct runs automatically **before** every QC. The corrected MLoS data is then used for all 4 QC layers.
+
+Five corrections are applied:
+
+| # | Field(s) | Correction |
+|---|----------|------------|
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | NULL → `NA` |
+| 2 | `scattered` | NULL or `NA` → `N` |
+| 3 | `reasons_for_inaccessibility` | NULL → `NA` where `accessibility_status` is `Fully Accessible` |
+| 4 | `source` | NULL or empty → `IE` |
+| 5 | `globalid` | All `{` `}` stripped; any still-invalid UUID replaced with a fresh generated UUID |
+
+The **🔧 Auto Correct tab** shows:
+- A correction log (column, correction applied, rows fixed)
+- A green "No corrections needed" message if data is already clean
+- **⬇️ Download Full MLoS — Auto Corrected (Excel)** button — always visible, exports `{filename}_autocorrected.xlsx`
+
+---
+
+### 3. Schema Alignment (Rules S1–S2)
+
+The first QC layer checks whether the uploaded file contains all required columns. Schema failures are reported in the QC Summary without stopping the remaining checks.
 
 **If columns are missing:**
 - Rule S1 or S2 shows as `❌ FAIL` in the QC Summary
-- An expandable table lists each missing column, which table it belongs to, and the QC rules impacted
+- An expandable table lists each missing column, the table it belongs to, and the rules impacted
 - A **Download Schema Error Report (.xlsx)** button appears
 
 **Required columns — MLoS table (41 columns):**
 
 | Column | Used In Rule(s) |
 |--------|----------------|
-| `state_code`, `state_name` | Base identifiers |
+| `state_code`, `state_name` | Base identifiers, Boundary filter |
 | `lga_code`, `lga_name` | Base identifiers |
 | `ward_name`, `ward_code` | Rules 4, B1, B2 |
 | `takeoffpoint` | Rules 2, TP2 |
@@ -91,14 +117,14 @@ The first QC layer checks whether the uploaded file contains all required column
 | `accessibility_status` | Rules 7, 8 |
 | `reasons_for_inaccessibility` | Rule 8 |
 | `habitational_status` | Rule 9 |
-| `set_population`, `set_target`, `number_of_houses` | Rule 10 |
+| `set_population`, `set_target`, `number_of_houses` | Rules 10, 11 |
 | `noncompliant_household` | Rule 10 |
 | `team_code` | Rule 14 |
 | `day_of_activity` | Rule 12 |
 | `urban`, `rural`, `scattered` | Rule 13 |
 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | Rule 14 |
 | `timestamp`, `last_updated` | Metadata |
-| `source` | Rule 15 |
+| `source` | Auto Correct |
 | `editor` | Rule 16 |
 | `globalid`, `fc_globalid`, `settlementarea_globalid` | Rule 17 |
 
@@ -110,25 +136,6 @@ The first QC layer checks whether the uploaded file contains all required column
 | `code` | Rule TP3 |
 | `wardcode` | Rule TP4 |
 | `globalid` | Rule TP5 |
-
----
-
-### 3. Auto Correct
-
-After reviewing the QC Summary, go to the **🔧 Auto Correct** tab to apply automatic fixes to the uploaded MLoS data.
-
-Four corrections are applied automatically:
-
-| # | Field(s) | Correction |
-|---|----------|------------|
-| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani` | NULL values replaced with `NA` |
-| 2 | `reasons_for_inaccessibility` | Filled with `NA` where `accessibility_status` is `Fully Accessible` and the field is NULL |
-| 3 | `source` | NULL or empty values replaced with `IE` |
-| 4 | `globalid` | All `{` and `}` characters stripped; any still-invalid UUID replaced with a freshly generated UUID |
-
-The tab displays a **correction log** (column, correction type, rows fixed). A **Download Corrected MLoS (Excel)** button exports the fixed dataset as `{filename}_corrected.xlsx`.
-
-> If no corrections are needed, a green "No corrections needed" message is shown.
 
 ---
 
@@ -154,6 +161,8 @@ Data integrity rules applied to the MLoS table.
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
+> Rule 15 (Source = MLoS) has been removed. `source` is now handled by Auto Correct (NULL/empty → `IE`).
+
 ---
 
 ### 5. Takeoffpoint QC Checks (Rules TP2–TP5)
@@ -177,16 +186,26 @@ Spatial and reference validation against the admin ward boundary dataset (9,410 
 
 | Rule | Check | Description |
 |------|-------|-------------|
-| B1 | Ward Code — Boundary Reference | `ward_code` must exist in the admin ward boundary reference dataset |
+| B1 | Ward Code — Boundary Reference | `ward_code` must exist in the boundary reference for the file's state(s) |
 | B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
 
-**Performance optimisation:** The boundary search is pre-filtered by `state_code` from the uploaded file, reducing the search space to only the wards within the relevant state(s).
+**State filtering:** The boundary reference is pre-filtered by `state_name` (e.g. "Nasarawa", "Kano") matching the uploaded file's `state_name` column. Both sides are normalised to lowercase before comparing. This reduces the search space to only the wards in the relevant state(s) and avoids false positives.
 
-> `lga_code` is intentionally excluded from the pre-filter — lga_code formats can differ between the uploaded file and the reference, which previously caused valid ward codes to be incorrectly flagged by B1.
+> `state_code` is intentionally not used for filtering — the 2-letter code `"NA"` (Nasarawa) is silently converted to `NaN` by pandas when reading from SQLite, causing valid ward codes to be incorrectly flagged.
+
+**Boundary Issues tab** — the combined download includes reference columns for direct comparison:
+
+| Extra Column | Meaning |
+|-------------|---------|
+| `Ref Ward Code` | Ward code as it appears in the boundary reference |
+| `Ref Ward Name` | Ward name from the reference |
+| `Ref LGA Code` / `Ref LGA Name` | LGA from the reference |
+| `Ref State Code` | State from the reference |
+| `In Boundary Reference` | `Yes` or `No — not found in reference` |
 
 Reference files bundled in the repo:
 - `ward_boundary_ref.csv` — 9,410 ward codes with state, LGA, and ward metadata
-- `ward_boundary_bbox.csv` — bounding box (min/max lon/lat) per ward code extracted from the admin boundary dataset
+- `ward_boundary_bbox.csv` — bounding box (min/max lon/lat) per ward code
 
 ---
 
@@ -234,7 +253,7 @@ smtp_user = "your@email.com"
 smtp_pass = "your-app-password"
 ```
 
-> **Note:** `smtp_host` must be the mail server hostname — not an email address.
+> `smtp_host` must be the mail server hostname — **not** an email address.
 
 ---
 
