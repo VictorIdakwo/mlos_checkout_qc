@@ -116,6 +116,38 @@ def load_view(conn, view_name):
     col_str = ", ".join(f'"{c}"' for c in safe)
     return pd.read_sql_query(f'SELECT {col_str} FROM "{view_name}"', conn)
 
+def load_csv(uploaded_file):
+    """Load a CSV file as the MLoS table. Returns (mlos_df, empty takeoff_df)."""
+    uploaded_file.seek(0)
+    mlos_df = pd.read_csv(uploaded_file, dtype=str)
+    takeoff_df = pd.DataFrame()
+    return mlos_df, takeoff_df
+
+def load_xlsx(uploaded_file):
+    """Load an XLSX/XLS file. Expects two sheets: mlos (sheet 1) and takeoffpoint (sheet 2).
+    Sheet names may match the view names or simplified aliases."""
+    uploaded_file.seek(0)
+    xl = pd.ExcelFile(uploaded_file)
+    sheet_names = xl.sheet_names
+
+    # Resolve mlos sheet — prefer view name, then 'mlos', then first sheet
+    mlos_aliases = {MLOS_VIEW.lower(), "mlos", "master_list", "settlements"}
+    mlos_sheet = next(
+        (s for s in sheet_names if s.lower() in mlos_aliases),
+        sheet_names[0]
+    )
+
+    # Resolve takeoff sheet — prefer view name, then 'takeoffpoint', then second sheet
+    takeoff_aliases = {TAKEOFF_VIEW.lower(), "takeoffpoint", "takeoff", "takeoff_point"}
+    takeoff_sheet = next(
+        (s for s in sheet_names if s.lower() in takeoff_aliases and s != mlos_sheet),
+        sheet_names[1] if len(sheet_names) > 1 else None
+    )
+
+    mlos_df    = xl.parse(mlos_sheet, dtype=str)
+    takeoff_df = xl.parse(takeoff_sheet, dtype=str) if takeoff_sheet else pd.DataFrame()
+    return mlos_df, takeoff_df
+
 def get_uploaded_data(uploaded_file, progress=None):
     cache_key = (uploaded_file.name, getattr(uploaded_file, "size", None))
     if st.session_state.get("uploaded_cache_key") == cache_key:
@@ -125,22 +157,38 @@ def get_uploaded_data(uploaded_file, progress=None):
 
     if progress is not None:
         progress.progress(10)
-    conn, tmp_path = load_sqlite(uploaded_file)
-    try:
+
+    ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+
+    if ext in ("xlsx", "xls"):
         if progress is not None:
             progress.progress(35)
-        mlos_df    = load_view(conn, MLOS_VIEW)
-        if progress is not None:
-            progress.progress(65)
-        takeoff_df = load_view(conn, TAKEOFF_VIEW)
+        mlos_df, takeoff_df = load_xlsx(uploaded_file)
         if progress is not None:
             progress.progress(90)
-    finally:
-        conn.close()
+    elif ext == "csv":
+        if progress is not None:
+            progress.progress(35)
+        mlos_df, takeoff_df = load_csv(uploaded_file)
+        if progress is not None:
+            progress.progress(90)
+    else:
+        conn, tmp_path = load_sqlite(uploaded_file)
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+            if progress is not None:
+                progress.progress(35)
+            mlos_df    = load_view(conn, MLOS_VIEW)
+            if progress is not None:
+                progress.progress(65)
+            takeoff_df = load_view(conn, TAKEOFF_VIEW)
+            if progress is not None:
+                progress.progress(90)
+        finally:
+            conn.close()
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     st.session_state["uploaded_cache_key"] = cache_key
     st.session_state["mlos_df"] = mlos_df
@@ -487,11 +535,13 @@ def build_excel_report(filename, mlos_checks, mlos_detail, tp_checks, tp_detail,
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### 📁 Upload SQLite File")
+    st.markdown("### 📁 Upload File")
     uploaded = st.file_uploader(
-        "Upload SQLite or DB file", type=["sqlite","db","sqlite3"],
+        "Upload SQLite, CSV, or Excel file",
+        type=["sqlite", "db", "sqlite3", "csv", "xlsx", "xls"],
         key="sqlite_upload", label_visibility="collapsed",
     )
+    st.caption("Supported: `.sqlite` · `.csv` · `.xlsx` · `.xls`")
     st.markdown("---")
     st.markdown("#### 📋 QC Rules Reference")
     with st.expander("MLoS Table Rules", expanded=False):
@@ -536,14 +586,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if not uploaded:
-    st.info("👈 **Upload a `.sqlite` file** using the sidebar to run QC checks.")
+    st.info("👈 **Upload a file** (`.sqlite`, `.csv`, `.xlsx`, or `.xls`) using the sidebar to run QC checks.")
     with st.expander("ℹ️ About this tool", expanded=True):
         st.markdown("""
-This tool runs automated Quality Control on MLOS checkout SQLite files.
+This tool runs automated Quality Control on MLOS checkout files.
+
+**Supported formats:**
+- **SQLite** (`.sqlite`, `.db`) — reads `master_list_settlement_update_view` and `mlos_takeoffpoint_view` directly
+- **Excel** (`.xlsx`, `.xls`) — Sheet 1 = MLoS data, Sheet 2 = Takeoffpoint data
+- **CSV** (`.csv`) — treated as MLoS data only (takeoffpoint cross-checks will be skipped)
 
 **It checks:**
-- **`master_list_settlement_update_view`** (MLoS layer) — 15+ rules
-- **`mlos_takeoffpoint_view`** (Takeoffpoint layer) — 4 rules
+- **MLoS layer** — 15+ rules
+- **Takeoffpoint layer** — 4 rules
 - Cross-table consistency (ward codes, takeoffpoint names & codes)
 
 **The Generate Report tab lets you:**
@@ -554,7 +609,7 @@ This tool runs automated Quality Control on MLOS checkout SQLite files.
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────────
 load_progress = st.progress(0)
-with st.spinner("Loading SQLite file…"):
+with st.spinner("Loading file…"):
     try:
         mlos_df, takeoff_df = get_uploaded_data(uploaded, progress=load_progress)
     except Exception as e:
