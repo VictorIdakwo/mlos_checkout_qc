@@ -396,36 +396,43 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # ── B1: check ward_code against the full reference (set lookup — O(1), instant).
-    # State filtering is NOT applied here because state_code formats differ between
-    # the MLoS file and the boundary reference, causing valid wards to be missed.
-    # The full 9,410-ward set lookup is negligible compared to the rest of the QC.
-    if not ref_df.empty and "ward_code" in ref_df.columns:
-        valid_wards = set(ref_df["ward_code"].dropna().astype(str).str.strip())
+    # ── Filter boundary reference by state_name (case-insensitive).
+    # state_name ("Nasarawa", "Kano", etc.) is a plain readable string shared
+    # by both the MLoS data and the boundary reference — no format ambiguity.
+    # This replaces state_code filtering which caused false positives because
+    # "NA" (Nasarawa's code) is silently converted to NaN by pandas.
+    filtered_ref  = ref_df.copy()  if not ref_df.empty  else ref_df
+    filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
+
+    if (not ref_df.empty
+            and "state_name" in mlos.columns
+            and "state_name" in ref_df.columns):
+        mlos_state_names = set(
+            mlos["state_name"].dropna().astype(str).str.strip().str.lower()
+        )
+        ref_sn_norm  = ref_df["state_name"].astype(str).str.strip().str.lower()
+        filtered_ref = filtered_ref[ref_sn_norm.isin(mlos_state_names)]
+
+        if not filtered_ref.empty and not filtered_bbox.empty and "ward_code" in filtered_bbox.columns:
+            state_ward_set = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
+            filtered_bbox  = filtered_bbox[
+                filtered_bbox["ward_code"].astype(str).str.strip().isin(state_ward_set)
+            ]
+
+    # Fallback to full reference if state_name filtering yields nothing
+    if filtered_ref.empty and not ref_df.empty:
+        filtered_ref  = ref_df.copy()
+        filtered_bbox = bbox_df.copy()
+
+    # B1 — ward_code must exist in the state-name-filtered boundary reference
+    if not filtered_ref.empty and "ward_code" in filtered_ref.columns:
+        valid_wards = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
         add("B1", "Ward Code — Boundary Reference",
-            "ward_code must exist in the admin ward boundary reference (9,410 wards)",
+            "ward_code must exist in the admin ward boundary reference for the file's state(s)",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
             ["ward_code"])
 
-    # ── B2: filter bbox by state_code (normalised to uppercase) to reduce the
-    # merge size. Falls back to full bbox if state_code filtering yields nothing.
-    filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
-    if (not bbox_df.empty
-            and "ward_code" in bbox_df.columns
-            and "state_code" in mlos.columns
-            and "state_code" in ref_df.columns):
-        # Use fillna("") instead of dropna() so that pandas-read "NA" string
-        # values (which SQLite returns as NaN) still participate in the filter.
-        mlos_states     = set(mlos["state_code"].fillna("").astype(str).str.strip().str.upper()) - {""}
-        ref_norm        = ref_df.copy()
-        ref_norm["_sc"] = ref_norm["state_code"].astype(str).str.strip().str.upper()
-        state_wards     = set(ref_norm.loc[ref_norm["_sc"].isin(mlos_states), "ward_code"].dropna().astype(str).str.strip())
-        if state_wards:
-            filtered_bbox = filtered_bbox[
-                filtered_bbox["ward_code"].astype(str).str.strip().isin(state_wards)
-            ]
-
-    # B2 — lat/lon must fall within the bounding box of the declared ward_code
+    # B2 — lat/lon must fall within the state-filtered bounding box
     if (not filtered_bbox.empty and "ward_code" in filtered_bbox.columns
             and "latitude" in mlos.columns and "longitude" in mlos.columns):
         chk = pd.DataFrame({
