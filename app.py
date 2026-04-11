@@ -1071,6 +1071,7 @@ with st.sidebar:
 |------|-------|
 | B1 | ward_code exists in admin ward boundary reference (9,410 wards) |
 | B2 | latitude/longitude falls within the bounding box of the declared ward_code |
+| B3 | state_name in MLoS matches the state_name assigned to that ward_code in the boundary reference |
         """)
     st.markdown("---")
     st.caption("eHealth Africa · MLOS QC Tool · v1.1")
@@ -1099,7 +1100,7 @@ This tool runs automated Quality Control on MLOS checkout files across **4 QC la
 - 🔎 **Schema Alignment** (S1–S2) — verifies all required columns are present
 - 🏘️ **MLoS Rules** (2–17) — 15+ data integrity checks
 - 📍 **Takeoffpoint Rules** (TP2–TP5) — 4 cross-table checks
-- 🗺️ **Boundary Checks** (B1–B2) — ward code and coordinate validation against admin boundary reference
+- 🗺️ **Boundary Checks** (B1–B3) — ward code, coordinate, and state name validation against admin boundary reference
 
 **Outputs:**
 - Pass Rate % and Fail Rate % on the dashboard

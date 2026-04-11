@@ -110,7 +110,7 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `longitude` | GPS longitude | Rule B2 |
 | `security_compromised` | Y or N | Rule 6 |
 | `accessibility_status` | Fully Accessible / Partially Accessible / Inaccessible | Rules 7, 8 |
-| `reasons_for_inaccessibility` | Reason text | Rule 8, Auto Correct |
+| `reasons_for_inaccessibility` | Reason text | Rule 8, Auto Correct (Nullable — exempt from Rule 5) |
 | `habitational_status` | Abandoned / Migrated / Inhabited / Partially Inhabited | Rule 9 |
 | `set_population` | Total settlement population | Rules 10, 11 |
 | `set_target` | Target count | Rule 10 |
@@ -157,7 +157,7 @@ Data integrity rules applied to the MLoS table.
 | 2 | Takeoffpoint Name Match | `takeoffpoint` must match `name` in the Takeoffpoint table |
 | 3 | Takeoffpoint Code Match | `takeoffpoint_code` must match `code` in the Takeoffpoint table |
 | 4 | Ward Code Match | `ward_code` must match `wardcode` in the Takeoffpoint table |
-| 5 | No Null in Required Fields | All required fields must not be null or empty |
+| 5 | No Null in Required Fields | All required fields must not be null or empty (exempt: `primarysettlement_name`, `alternate_name`, `reasons_for_inaccessibility`) |
 | 6 | Security Compromised Y/N | `security_compromised` must be `Y` or `N` |
 | 7 | Accessibility Status Valid | Must be: `Fully Accessible`, `Partially Accessible`, or `Inaccessible` |
 | 8 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
