@@ -394,21 +394,44 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # ── Use the full boundary reference for B1 and B2.
-    # State/LGA code formats frequently differ between the uploaded file and the
-    # reference (e.g. "NI" vs "28"), so pre-filtering caused valid ward codes to
-    # be dropped and incorrectly flagged. A set lookup on 9,410 rows is instant.
+    # ── Standardize state_code to uppercase stripped string on both sides,
+    # then pre-filter the boundary reference to only the state(s) in the file.
+    # The boundary data uses 2-letter codes (e.g. "NI", "ZA", "RI").
+    # Normalising both sides removes case/whitespace mismatches before comparing.
+    filtered_ref  = ref_df.copy()  if not ref_df.empty  else ref_df
+    filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
 
-    # B1 — ward_code must exist in the full boundary reference
-    if not ref_df.empty and "ward_code" in ref_df.columns:
-        valid_wards = set(ref_df["ward_code"].dropna().astype(str).str.strip())
+    if (not ref_df.empty
+            and "state_code" in mlos.columns
+            and "state_code" in ref_df.columns):
+        # Normalise: strip whitespace + uppercase on both sides
+        mlos_states = set(
+            mlos["state_code"].dropna().astype(str).str.strip().str.upper()
+        )
+        ref_states_norm = ref_df["state_code"].astype(str).str.strip().str.upper()
+        filtered_ref = filtered_ref[ref_states_norm.isin(mlos_states)]
+
+        if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns:
+            valid_ref_wards = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
+            filtered_bbox = filtered_bbox[
+                filtered_bbox["ward_code"].astype(str).str.strip().isin(valid_ref_wards)
+            ]
+
+    # Fallback: if filtering left nothing (state_code absent/unrecognised), use full ref
+    if filtered_ref.empty and not ref_df.empty:
+        filtered_ref  = ref_df.copy()
+        filtered_bbox = bbox_df.copy()
+
+    # B1 — ward_code must exist in the state-filtered boundary reference
+    if not filtered_ref.empty and "ward_code" in filtered_ref.columns:
+        valid_wards = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
         add("B1", "Ward Code — Boundary Reference",
-            "ward_code must exist in the admin ward boundary reference (9,410 wards)",
+            "ward_code must exist in the admin ward boundary reference for the file's state(s)",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
             ["ward_code"])
 
     # B2 — lat/lon must fall within the bounding box of the declared ward_code
-    if (not bbox_df.empty and "ward_code" in bbox_df.columns
+    if (not filtered_bbox.empty and "ward_code" in filtered_bbox.columns
             and "latitude" in mlos.columns and "longitude" in mlos.columns):
         chk = pd.DataFrame({
             "ward_code": mlos["ward_code"].astype(str).str.strip().values,
@@ -416,7 +439,7 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             "lon":       pd.to_numeric(mlos["longitude"], errors="coerce").values,
         }, index=mlos.index)
 
-        bbox_ref = bbox_df[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
+        bbox_ref = filtered_bbox[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
         for col in ["min_lon","min_lat","max_lon","max_lat"]:
             bbox_ref[col] = pd.to_numeric(bbox_ref[col], errors="coerce")
 
