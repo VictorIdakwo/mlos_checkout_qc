@@ -348,6 +348,8 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
 
 # ─── QC Engine — Takeoffpoint ────────────────────────────────────────────────────
 def run_takeoff_qc(takeoff: pd.DataFrame, mlos: pd.DataFrame):
+    if takeoff.empty or len(takeoff.columns) == 0:
+        return [], pd.DataFrame()
     checks, details = [], []
     total  = len(takeoff)
     id_col = "ogc_fid" if "ogc_fid" in takeoff.columns else takeoff.columns[0]
@@ -631,7 +633,12 @@ else:
         load_progress.progress(10)
         mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
         load_progress.progress(70)
-        tp_checks,   tp_detail   = run_takeoff_qc(takeoff_df, mlos_df)
+        if takeoff_df.empty:
+            st.warning("⚠️ No Takeoffpoint data found — takeoff QC checks skipped. "
+                       "For full QC, upload a `.sqlite` or `.xlsx` file with a takeoffpoint sheet.")
+            tp_checks, tp_detail = [], pd.DataFrame()
+        else:
+            tp_checks, tp_detail = run_takeoff_qc(takeoff_df, mlos_df)
         load_progress.progress(100)
     st.session_state["qc_cache_key"] = qc_cache_key
     st.session_state["mlos_checks"] = mlos_checks
