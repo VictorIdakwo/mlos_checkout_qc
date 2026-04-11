@@ -202,62 +202,218 @@ def pct(v, t): return f"{v/t*100:.1f}%" if t else "0%"
 def is_uuid(x): return bool(UUID_RE.match(str(x).strip())) if x and str(x) != "nan" else False
 def is_editor(x): return bool(EDITOR_RE.match(str(x).strip())) if x and str(x) != "nan" else False
 
-# ─── Schema Validation ───────────────────────────────────────────────────────────
+# ─── Schema QC ───────────────────────────────────────────────────────────────────
 MLOS_REQUIRED_COLS = {
-    "takeoffpoint", "takeoffpoint_code", "ward_code", "settlement_name",
-    "security_compromised", "accessibility_status", "reasons_for_inaccessibility",
-    "habitational_status", "set_target", "number_of_houses", "set_population",
-    "day_of_activity", "urban", "rural", "scattered",
-    "highrisk", "slums", "densely_populated", "hard2reach", "border",
-    "normadic", "riverine", "fulani", "team_code",
-    "source", "editor", "globalid",
+    "state_code", "state_name", "lga_code", "lga_name", "ward_name", "ward_code",
+    "takeoffpoint", "takeoffpoint_code", "settlement_name", "primarysettlement_name",
+    "alternate_name", "latitude", "longitude", "security_compromised",
+    "accessibility_status", "reasons_for_inaccessibility", "habitational_status",
+    "set_population", "set_target", "number_of_houses", "noncompliant_household",
+    "team_code", "day_of_activity", "urban", "rural", "highrisk", "slums",
+    "densely_populated", "hard2reach", "border", "normadic", "scattered",
+    "riverine", "fulani", "timestamp", "source", "last_updated", "editor",
+    "globalid", "fc_globalid", "settlementarea_globalid",
 }
 TAKEOFF_REQUIRED_COLS = {"name", "code", "wardcode", "globalid"}
 
-def validate_schema(mlos: pd.DataFrame, takeoff: pd.DataFrame):
+def run_schema_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
     """
-    Compare uploaded DataFrame columns against expected schemas.
-    Returns a list of issue dicts and a summary DataFrame for download.
+    Schema alignment QC — checks required columns are present.
+    Returns check entries (same format as run_mlos_qc) and a detail DataFrame.
+    Does NOT stop the QC process.
     """
-    issues = []
+    checks, details = [], []
 
     mlos_cols    = set(mlos.columns.str.strip().str.lower())
     missing_mlos = sorted(MLOS_REQUIRED_COLS - mlos_cols)
-    for col in missing_mlos:
-        issues.append({
-            "Table":   "MLoS",
-            "Missing Column": col,
-            "Impact": "QC rule(s) referencing this column will be skipped or may produce incorrect results",
-        })
+    n_mlos_total = len(MLOS_REQUIRED_COLS)
+    n_mlos_miss  = len(missing_mlos)
+    checks.append({
+        "Rule#": "S1", "QC Check": "MLoS Schema Alignment",
+        "Description": f"{n_mlos_total - n_mlos_miss}/{n_mlos_total} required MLoS columns present",
+        "Failing Rows": n_mlos_miss, "Total Rows": n_mlos_total,
+        "Fail %": pct(n_mlos_miss, n_mlos_total),
+        "Status": "❌ FAIL" if n_mlos_miss else "✅ PASS",
+    })
+    if missing_mlos:
+        details.append(pd.DataFrame([{
+            "Rule#": "S1", "Rule": "MLoS Schema Alignment",
+            "Table": "MLoS", "Missing Column": col,
+            "Impact": "QC rule(s) referencing this column will be skipped or may return incorrect results",
+        } for col in missing_mlos]))
 
     if not takeoff.empty and len(takeoff.columns) > 0:
-        tp_cols       = set(takeoff.columns.str.strip().str.lower())
-        missing_tp    = sorted(TAKEOFF_REQUIRED_COLS - tp_cols)
-        for col in missing_tp:
-            issues.append({
-                "Table":   "Takeoffpoint",
-                "Missing Column": col,
-                "Impact": "QC rule(s) referencing this column will be skipped or may produce incorrect results",
-            })
+        tp_cols    = set(takeoff.columns.str.strip().str.lower())
+        missing_tp = sorted(TAKEOFF_REQUIRED_COLS - tp_cols)
+        n_tp_total = len(TAKEOFF_REQUIRED_COLS)
+        n_tp_miss  = len(missing_tp)
+        checks.append({
+            "Rule#": "S2", "QC Check": "Takeoffpoint Schema Alignment",
+            "Description": f"{n_tp_total - n_tp_miss}/{n_tp_total} required Takeoffpoint columns present",
+            "Failing Rows": n_tp_miss, "Total Rows": n_tp_total,
+            "Fail %": pct(n_tp_miss, n_tp_total),
+            "Status": "❌ FAIL" if n_tp_miss else "✅ PASS",
+        })
+        if missing_tp:
+            details.append(pd.DataFrame([{
+                "Rule#": "S2", "Rule": "Takeoffpoint Schema Alignment",
+                "Table": "Takeoffpoint", "Missing Column": col,
+                "Impact": "QC rule(s) referencing this column will be skipped or may return incorrect results",
+            } for col in missing_tp]))
 
-    return issues, pd.DataFrame(issues) if issues else pd.DataFrame()
+    schema_detail = pd.concat(details, ignore_index=True) if details else pd.DataFrame()
+    return checks, schema_detail
 
-def build_schema_report_xlsx(issues_df: pd.DataFrame, filename: str) -> bytes:
+def build_schema_report_xlsx(schema_detail: pd.DataFrame) -> bytes:
     """Produce a downloadable Excel report listing schema mismatches."""
     out = BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        issues_df.to_excel(writer, index=False, sheet_name="Schema Issues")
+        schema_detail.to_excel(writer, index=False, sheet_name="Schema Issues")
         ws = writer.sheets["Schema Issues"]
         header_fill = PatternFill("solid", fgColor="1D4ED8")
         header_font = Font(bold=True, color="FFFFFF")
         for cell in ws[1]:
-            cell.fill   = header_fill
-            cell.font   = header_font
+            cell.fill      = header_fill
+            cell.font      = header_font
             cell.alignment = Alignment(horizontal="center")
         for col_cells in ws.columns:
             length = max(len(str(c.value or "")) for c in col_cells) + 4
             ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(length, 60)
     return out.getvalue()
+
+# ─── Boundary Reference Loading ──────────────────────────────────────────────────
+BOUNDARY_REF_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ward_boundary_ref.csv")
+BOUNDARY_BBOX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ward_boundary_bbox.csv")
+
+@st.cache_data(show_spinner=False)
+def load_boundary_refs():
+    """Load ward code reference and bounding box lookup tables."""
+    ref_df  = pd.read_csv(BOUNDARY_REF_PATH,  dtype=str) if os.path.exists(BOUNDARY_REF_PATH)  else pd.DataFrame()
+    bbox_df = pd.read_csv(BOUNDARY_BBOX_PATH, dtype=str) if os.path.exists(BOUNDARY_BBOX_PATH) else pd.DataFrame()
+    for col in ["min_lon","min_lat","max_lon","max_lat"]:
+        if col in bbox_df.columns:
+            bbox_df[col] = pd.to_numeric(bbox_df[col], errors="coerce")
+    return ref_df, bbox_df
+
+# ─── QC Engine — Ward Boundary ───────────────────────────────────────────────────
+def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.DataFrame):
+    checks, details = [], []
+    if "ward_code" not in mlos.columns:
+        return checks, pd.DataFrame()
+
+    total  = len(mlos)
+    id_col = "ogc_fid" if "ogc_fid" in mlos.columns else mlos.columns[0]
+    BASE   = [c for c in [id_col,"state_name","lga_name","ward_code","settlement_name"] if c in mlos.columns]
+
+    def add(num, rule, desc, mask, extra=None):
+        n    = int(mask.sum())
+        cols = BASE + [c for c in (extra or []) if c in mlos.columns and c not in BASE]
+        checks.append({"Rule#": num, "QC Check": rule, "Description": desc,
+                        "Failing Rows": n, "Total Rows": total,
+                        "Fail %": pct(n, total),
+                        "Status": "❌ FAIL" if n else "✅ PASS"})
+        if n:
+            sub = mlos[mask][cols].copy()
+            sub.insert(0, "Rule#", num)
+            sub.insert(1, "Rule", rule)
+            details.append(sub)
+
+    # B1 — ward_code must exist in boundary reference
+    if not ref_df.empty and "ward_code" in ref_df.columns:
+        valid_wards = set(ref_df["ward_code"].dropna().str.strip())
+        add("B1", "Ward Code — Boundary Reference",
+            "ward_code must exist in the admin ward boundary reference dataset",
+            ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
+            ["ward_code"])
+
+    # B2 — lat/lon must fall within the bounding box of the declared ward_code
+    if (not bbox_df.empty and "ward_code" in bbox_df.columns
+            and "latitude" in mlos.columns and "longitude" in mlos.columns):
+        bbox_lookup = bbox_df.set_index("ward_code")
+        lat  = pd.to_numeric(mlos["latitude"],  errors="coerce")
+        lon  = pd.to_numeric(mlos["longitude"], errors="coerce")
+        wc   = mlos["ward_code"].astype(str).str.strip()
+
+        def outside_bbox(row_idx):
+            code = wc.iloc[row_idx]
+            if code not in bbox_lookup.index:
+                return False          # ward_code not in reference — caught by B1
+            bb = bbox_lookup.loc[code]
+            pt_lat, pt_lon = lat.iloc[row_idx], lon.iloc[row_idx]
+            if pd.isna(pt_lat) or pd.isna(pt_lon):
+                return False          # null coords — caught by schema / R5
+            return not (bb["min_lon"] <= pt_lon <= bb["max_lon"]
+                        and bb["min_lat"] <= pt_lat <= bb["max_lat"])
+
+        mask_b2 = pd.Series(
+            [outside_bbox(i) for i in range(len(mlos))],
+            index=mlos.index
+        )
+        add("B2", "Coordinates — Within Ward Boundary",
+            "latitude/longitude must fall within the bounding box of the declared ward_code",
+            mask_b2, ["ward_code","latitude","longitude"])
+
+    detail_df = pd.concat(details, ignore_index=True) if details else pd.DataFrame()
+    return checks, detail_df
+
+# ─── Email Sender ─────────────────────────────────────────────────────────────────
+def send_qc_email(filename: str, all_checks: list, mlos_fail_rows: int,
+                  tp_fail_rows: int, schema_detail: pd.DataFrame,
+                  boundary_fail_rows: int):
+    """Send QC summary email using SMTP credentials stored in st.secrets."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    TO  = ["adanna.alex@ehealthnigeria.org"]
+    CC  = ["fashoto.busayo@ehealthnigeria.org",
+           "victor.idakwo@ehealthnigeria.org",
+           "oluwadamilare.akindipe@ehealthnigeria.org"]
+
+    n_fail  = sum(1 for c in all_checks if "FAIL" in c["Status"])
+    n_pass  = len(all_checks) - n_fail
+    verdict = "CLEAN ✅" if n_fail == 0 else f"FAILING ❌ ({n_fail} check(s))"
+
+    schema_lines = ""
+    if not schema_detail.empty:
+        missing = schema_detail[["Table","Missing Column"]].to_string(index=False)
+        schema_lines = f"\nMissing Columns:\n{missing}\n"
+
+    body = f"""MLoS QC Report — {filename}
+{"="*60}
+Overall Verdict   : {verdict}
+Checks Run        : {len(all_checks)}
+Checks Passing    : {n_pass}
+Checks Failing    : {n_fail}
+
+MLoS Issue Rows       : {mlos_fail_rows:,}
+Takeoffpoint Issue Rows: {tp_fail_rows:,}
+Boundary Issue Rows   : {boundary_fail_rows:,}
+{schema_lines}
+Check-by-Check Summary:
+{"-"*60}
+"""
+    for c in all_checks:
+        body += f"[{c['Status']}] Rule {c['Rule#']}: {c['QC Check']} — {c['Failing Rows']} failing / {c['Total Rows']} ({c['Fail %']})\n"
+
+    body += f"\n{'='*60}\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+    msg = MIMEMultipart()
+    msg["From"]    = st.secrets.get("smtp_user", "")
+    msg["To"]      = ", ".join(TO)
+    msg["Cc"]      = ", ".join(CC)
+    msg["Subject"] = f"MLoS QC checks for {filename}"
+    msg.attach(MIMEText(body, "plain"))
+
+    smtp_host = st.secrets.get("smtp_host", "smtp.gmail.com")
+    smtp_port = int(st.secrets.get("smtp_port", 587))
+    smtp_user = st.secrets.get("smtp_user", "")
+    smtp_pass = st.secrets.get("smtp_pass", "")
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(smtp_user, TO + CC, msg.as_string())
 
 # ─── QC Engine — MLoS ────────────────────────────────────────────────────────────
 def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
@@ -679,67 +835,63 @@ filename = uploaded.name
 
 # ─── RUN QC ───────────────────────────────────────────────────────────────────────
 qc_cache_key = (filename, getattr(uploaded, "size", None))
+boundary_ref, boundary_bbox = load_boundary_refs()
+
 if st.session_state.get("qc_cache_key") == qc_cache_key:
-    mlos_checks = st.session_state["mlos_checks"]
-    mlos_detail = st.session_state["mlos_detail"]
-    tp_checks   = st.session_state["tp_checks"]
-    tp_detail   = st.session_state["tp_detail"]
+    schema_checks    = st.session_state["schema_checks"]
+    schema_detail    = st.session_state["schema_detail"]
+    mlos_checks      = st.session_state["mlos_checks"]
+    mlos_detail      = st.session_state["mlos_detail"]
+    tp_checks        = st.session_state["tp_checks"]
+    tp_detail        = st.session_state["tp_detail"]
+    boundary_checks  = st.session_state["boundary_checks"]
+    boundary_detail  = st.session_state["boundary_detail"]
     load_progress.progress(100)
 else:
     with st.spinner("Running QC checks…"):
-        load_progress.progress(10)
-        mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
-        load_progress.progress(70)
+        load_progress.progress(5)
+        schema_checks, schema_detail       = run_schema_qc(mlos_df, takeoff_df)
+        load_progress.progress(15)
+        mlos_checks, mlos_detail           = run_mlos_qc(mlos_df, takeoff_df)
+        load_progress.progress(60)
         if takeoff_df.empty:
-            st.warning("⚠️ No Takeoffpoint data found — takeoff QC checks skipped. "
-                       "For full QC, upload a `.sqlite` or `.xlsx` file with a takeoffpoint sheet.")
             tp_checks, tp_detail = [], pd.DataFrame()
         else:
-            tp_checks, tp_detail = run_takeoff_qc(takeoff_df, mlos_df)
+            tp_checks, tp_detail           = run_takeoff_qc(takeoff_df, mlos_df)
+        load_progress.progress(80)
+        boundary_checks, boundary_detail   = run_ward_boundary_qc(mlos_df, boundary_ref, boundary_bbox)
         load_progress.progress(100)
-    st.session_state["qc_cache_key"] = qc_cache_key
-    st.session_state["mlos_checks"] = mlos_checks
-    st.session_state["mlos_detail"] = mlos_detail
-    st.session_state["tp_checks"]   = tp_checks
-    st.session_state["tp_detail"]   = tp_detail
+    st.session_state["qc_cache_key"]   = qc_cache_key
+    st.session_state["schema_checks"]  = schema_checks
+    st.session_state["schema_detail"]  = schema_detail
+    st.session_state["mlos_checks"]    = mlos_checks
+    st.session_state["mlos_detail"]    = mlos_detail
+    st.session_state["tp_checks"]      = tp_checks
+    st.session_state["tp_detail"]      = tp_detail
+    st.session_state["boundary_checks"]= boundary_checks
+    st.session_state["boundary_detail"]= boundary_detail
 
-# ─── SCHEMA VALIDATION ───────────────────────────────────────────────────────────
-schema_issues, schema_df = validate_schema(mlos_df, takeoff_df)
-
-if schema_issues:
-    st.error(
-        f"⚠️ **Schema Mismatch Detected** — {len(schema_issues)} column(s) are missing from the uploaded file. "
-        "QC rules that depend on these columns will be skipped or may return incorrect results. "
-        "Please fix the file and re-upload."
-    )
-    with st.expander("🔍 View Missing Columns", expanded=True):
-        st.dataframe(schema_df, use_container_width=True, hide_index=True)
-
-    schema_xlsx = build_schema_report_xlsx(schema_df, filename)
-    st.download_button(
-        label="⬇️ Download Schema Error Report (.xlsx)",
-        data=schema_xlsx,
-        file_name=filename.rsplit(".", 1)[0] + "_schema_errors.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    st.stop()
-
-all_checks      = mlos_checks + tp_checks
-n_fail          = sum(1 for c in all_checks if "FAIL" in c["Status"])
-n_pass          = len(all_checks) - n_fail
-mlos_fail_rows  = len(mlos_detail)
-tp_fail_rows    = len(tp_detail)
+all_checks          = schema_checks + mlos_checks + tp_checks + boundary_checks
+n_fail              = sum(1 for c in all_checks if "FAIL" in c["Status"])
+n_pass              = len(all_checks) - n_fail
+pct_pass            = f"{n_pass / len(all_checks) * 100:.1f}%" if all_checks else "0%"
+pct_fail            = f"{n_fail / len(all_checks) * 100:.1f}%" if all_checks else "0%"
+mlos_fail_rows      = len(mlos_detail)
+tp_fail_rows        = len(tp_detail)
+boundary_fail_rows  = len(boundary_detail)
 
 # ─── FILE INFO + METRICS ──────────────────────────────────────────────────────────
 st.success(f"✅ Loaded **{filename}** — MLoS: **{len(mlos_df):,} rows** | Takeoffpoint: **{len(takeoff_df):,} rows**")
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("📄 MLoS Rows",         f"{len(mlos_df):,}")
-c2.metric("📍 TP Rows",            f"{len(takeoff_df):,}")
-c3.metric("🔍 Checks Run",         f"{len(all_checks)}")
-c4.metric("✅ Passing",            f"{n_pass}")
-c5.metric("❌ Failing",            f"{n_fail}")
-c6.metric("⚠️ Issue Rows",        f"{mlos_fail_rows + tp_fail_rows:,}")
+c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+c1.metric("📄 MLoS Rows",      f"{len(mlos_df):,}")
+c2.metric("📍 TP Rows",         f"{len(takeoff_df):,}")
+c3.metric("🔍 Checks Run",      f"{len(all_checks)}")
+c4.metric("✅ Passing",         f"{n_pass}")
+c5.metric("❌ Failing",         f"{n_fail}")
+c6.metric("⚠️ Issue Rows",     f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
+c7.metric("📈 Pass Rate",       pct_pass)
+c8.metric("📉 Fail Rate",       pct_fail)
 
 st.markdown("---")
 
@@ -755,10 +907,11 @@ else:
         unsafe_allow_html=True)
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 QC Summary",
     "🏘️ MLoS Issues",
     "📍 Takeoffpoint Issues",
+    "🗺️ Boundary Issues",
     "🔍 Raw Data",
     "📄 Generate Report",
 ])
@@ -770,6 +923,29 @@ with tab1:
             return ["background-color:#fff1f2; color:#be123c"] * len(row)
         return ["background-color:#f0fdf4; color:#15803d"] * len(row)
 
+    # ── Schema Alignment ─────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-title">🔎 Schema Alignment — QC Results</div>', unsafe_allow_html=True)
+    if schema_checks:
+        df_s = pd.DataFrame(schema_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
+        df_s = df_s.rename(columns={"Failing Rows": "Missing Columns", "Total Rows": "Expected Columns"})
+        st.dataframe(df_s.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
+    if not schema_detail.empty:
+        with st.expander("🔍 View Missing Column Details", expanded=False):
+            st.dataframe(schema_detail.drop(columns=["Rule#","Rule"], errors="ignore"),
+                         use_container_width=True, hide_index=True)
+        st.download_button(
+            label="⬇️ Download Schema Error Report (.xlsx)",
+            data=build_schema_report_xlsx(schema_detail),
+            file_name=filename.rsplit(".",1)[0] + "_schema_errors.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="schema_dl_tab1",
+        )
+    else:
+        st.success("✅ Schema aligned — all required columns are present.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── MLoS QC ──────────────────────────────────────────────────────────────────
     st.markdown('<div class="sec-title">🏘️ MLoS Table — QC Results</div>', unsafe_allow_html=True)
     if mlos_checks:
         df_m = pd.DataFrame(mlos_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
@@ -780,6 +956,12 @@ with tab1:
     if tp_checks:
         df_t = pd.DataFrame(tp_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
         st.dataframe(df_t.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">🗺️ Boundary Checks — QC Results</div>', unsafe_allow_html=True)
+    if boundary_checks:
+        df_b = pd.DataFrame(boundary_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
+        st.dataframe(df_b.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
 
 # ── Tab 2: MLoS Issues ────────────────────────────────────────────────────────────
 with tab2:
@@ -848,8 +1030,41 @@ with tab3:
                            file_name=filename.replace(".sqlite","")+"_tp_issues.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Tab 4: Raw Data ───────────────────────────────────────────────────────────────
+# ── Tab 4: Boundary Issues ────────────────────────────────────────────────────────
 with tab4:
+    if boundary_detail.empty:
+        st.success("✅ All ward codes match the boundary reference and all coordinates fall within their declared ward boundaries.")
+    else:
+        n_b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
+        st.error(f"❌ **{boundary_fail_rows:,} issue row(s)** across **{n_b_fail} boundary check(s)**")
+
+        for check in boundary_checks:
+            if "FAIL" not in check["Status"]: continue
+            rn     = check["Rule#"]
+            subset = boundary_detail[boundary_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
+            n      = len(subset)
+            with st.expander(f"❌  Rule {rn} — {check['QC Check']}  ({n:,} row{'s' if n!=1 else ''})", expanded=False):
+                st.caption(f"📌 {check['Description']}")
+                st.dataframe(subset, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**📋 All Boundary Issue Rows (combined)**")
+        st.dataframe(boundary_detail, use_container_width=True, hide_index=True, height=350)
+
+        buf_b = BytesIO()
+        with pd.ExcelWriter(buf_b, engine="openpyxl") as xw:
+            boundary_detail.to_excel(xw, sheet_name="All Boundary Issues", index=False)
+            for check in boundary_checks:
+                if "FAIL" not in check["Status"]: continue
+                rn  = check["Rule#"]
+                sub = boundary_detail[boundary_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
+                sub.to_excel(xw, sheet_name=f"Rule {rn}"[:31], index=False)
+        st.download_button("⬇️ Download Boundary Issues (Excel)", data=buf_b.getvalue(),
+                           file_name=filename.rsplit(".",1)[0] + "_boundary_issues.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ── Tab 5: Raw Data ───────────────────────────────────────────────────────────────
+with tab5:
     rt1, rt2 = st.tabs(["🏘️ MLoS View", "📍 Takeoffpoint View"])
     with rt1:
         st.markdown(f"**{len(mlos_df):,} rows × {len(mlos_df.columns)} columns**")
@@ -882,8 +1097,8 @@ with tab4:
         st.markdown(f"**{len(takeoff_df):,} rows × {len(takeoff_df.columns)} columns**")
         st.dataframe(takeoff_df, use_container_width=True, hide_index=True, height=420)
 
-# ── Tab 5: Generate Report ────────────────────────────────────────────────────────
-with tab5:
+# ── Tab 6: Generate Report ────────────────────────────────────────────────────────
+with tab6:
     st.markdown('<div class="sec-title">📄 QC Report — Summary &amp; Download</div>', unsafe_allow_html=True)
 
     # Verdict
@@ -974,5 +1189,19 @@ with tab5:
     if n_fail == 0:
         st.success("✅ File is CLEAN — all checks passed.")
     else:
-        st.warning(f"⚠️ {n_fail} check(s) failing with {mlos_fail_rows + tp_fail_rows} issue rows. "
+        st.warning(f"⚠️ {n_fail} check(s) failing with "
+                   f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows} issue rows. "
                    f"Fix and re-upload before submission.")
+
+    st.markdown("---")
+    st.markdown("**📧 Send QC Summary by Email**")
+    st.caption("Sends the QC summary to the data team. SMTP credentials must be configured in Streamlit secrets.")
+    if st.button("📤 Send QC Email", type="primary", key="send_email_btn"):
+        try:
+            send_qc_email(filename, all_checks, mlos_fail_rows,
+                          tp_fail_rows, schema_detail, boundary_fail_rows)
+            st.success("✅ Email sent successfully to the data team.")
+        except Exception as e:
+            st.error(f"❌ Failed to send email: {e}"
+                     "\n\nEnsure `smtp_host`, `smtp_port`, `smtp_user`, and `smtp_pass` "
+                     "are set in your Streamlit secrets.")
