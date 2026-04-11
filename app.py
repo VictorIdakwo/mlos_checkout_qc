@@ -1284,18 +1284,22 @@ with tab1:
         log_df = pd.DataFrame(correction_log)
         st.dataframe(log_df, use_container_width=True, hide_index=True)
 
-        st.markdown("---")
-        st.markdown("**📥 Download Corrected MLoS File**")
-        st.caption("The corrected data is exported as an Excel file ready for re-upload or submission.")
-        corrected_bytes = build_corrected_excel(corrected_df)
-        corrected_name  = filename.rsplit(".", 1)[0] + "_corrected.xlsx"
-        st.download_button(
-            label     = "⬇️ Download Corrected MLoS (Excel)",
-            data      = corrected_bytes,
-            file_name = corrected_name,
-            mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type      = "primary",
-        )
+    st.markdown("---")
+    st.markdown("**📥 Download Full MLoS Data (with Auto Corrections)**")
+    st.caption(
+        f"Full dataset — **{len(corrected_df):,} rows × {len(corrected_df.columns)} columns** — "
+        "with all auto corrections applied. Ready for re-upload or submission."
+    )
+    corrected_bytes = build_corrected_excel(corrected_df)
+    corrected_name  = filename.rsplit(".", 1)[0] + "_autocorrected.xlsx"
+    st.download_button(
+        label     = "⬇️ Download Full MLoS — Auto Corrected (Excel)",
+        data      = corrected_bytes,
+        file_name = corrected_name,
+        mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type      = "primary",
+        key       = "download_autocorrected",
+    )
 
 
 # ── Tab 3: MLoS Issues ────────────────────────────────────────────────────────────
