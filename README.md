@@ -117,13 +117,14 @@ The first QC layer checks whether the uploaded file contains all required column
 
 After reviewing the QC Summary, go to the **🔧 Auto Correct** tab to apply automatic fixes to the uploaded MLoS data.
 
-Three corrections are applied automatically:
+Four corrections are applied automatically:
 
 | # | Field(s) | Correction |
 |---|----------|------------|
 | 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani` | NULL values replaced with `NA` |
 | 2 | `reasons_for_inaccessibility` | Filled with `NA` where `accessibility_status` is `Fully Accessible` and the field is NULL |
-| 3 | `globalid` | Leading/trailing braces `{}` stripped; any still-invalid UUID replaced with a freshly generated UUID |
+| 3 | `source` | NULL or empty values replaced with `IE` |
+| 4 | `globalid` | All `{` and `}` characters stripped; any still-invalid UUID replaced with a freshly generated UUID |
 
 The tab displays a **correction log** (column, correction type, rows fixed). A **Download Corrected MLoS (Excel)** button exports the fixed dataset as `{filename}_corrected.xlsx`.
 

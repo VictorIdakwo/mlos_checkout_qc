@@ -517,12 +517,12 @@ FLAG_COLS = [
 
 def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
     """
-    Apply three auto-corrections to the MLoS DataFrame.
+    Apply auto-corrections to the MLoS DataFrame.
     Returns a corrected copy and a log of changes made.
     """
     import uuid as _uuid
     df  = mlos.copy()
-    log = []   # list of {Column, Rule, Rows Fixed}
+    log = []   # list of {Column, Correction, Rows Fixed}
 
     # ── Correction 1: Flag columns NULL → "NA" ───────────────────────────────
     for col in FLAG_COLS:
@@ -550,18 +550,28 @@ def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
                         "Correction": "NULL → NA (Fully Accessible rows)",
                         "Rows Fixed": n})
 
-    # ── Correction 3: Invalid globalid → strip braces / regenerate UUID ──────
+    # ── Correction 3: source NULL / empty → "IE" ─────────────────────────────
+    if "source" in df.columns:
+        mask = df["source"].isna() | df["source"].astype(str).str.strip().eq("")
+        n = int(mask.sum())
+        if n:
+            df.loc[mask, "source"] = "IE"
+            log.append({"Column": "source",
+                        "Correction": "NULL / empty → IE",
+                        "Rows Fixed": n})
+
+    # ── Correction 4: globalid — strip braces then regenerate invalid UUIDs ──
     if "globalid" in df.columns:
-        # Step 1: strip leading { and trailing } if present
-        brace_mask = df["globalid"].astype(str).str.match(r"^\{.*\}$", na=False)
-        n_brace = int(brace_mask.sum())
+        # Step 1: strip any leading { and trailing } characters
+        has_braces = df["globalid"].astype(str).str.contains(r"[\{\}]", na=False)
+        n_brace = int(has_braces.sum())
         if n_brace:
-            df.loc[brace_mask, "globalid"] = (
-                df.loc[brace_mask, "globalid"]
-                  .astype(str).str.strip().str.strip("{}")
+            df.loc[has_braces, "globalid"] = (
+                df.loc[has_braces, "globalid"]
+                  .astype(str).str.replace(r"[\{\}]", "", regex=True).str.strip()
             )
 
-        # Step 2: regenerate UUID for any still-invalid globalid
+        # Step 2: generate a fresh UUID for any value still not a valid UUID
         invalid_mask = ~vec_is_uuid(df["globalid"])
         n_gen = int(invalid_mask.sum())
         if n_gen:
@@ -572,7 +582,7 @@ def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
         total_fixed = n_brace + n_gen
         if total_fixed:
             log.append({"Column": "globalid",
-                        "Correction": f"Braces stripped ({n_brace} rows); UUID regenerated ({n_gen} rows)",
+                        "Correction": f"Braces removed ({n_brace} rows); UUID regenerated ({n_gen} rows)",
                         "Rows Fixed": total_fixed})
 
     return df, log
@@ -1208,7 +1218,8 @@ with tab2:
         "`normadic`, `scattered`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
         "2. **Reason for Inaccessibility** — filled with `NA` where `accessibility_status` is "
         "`Fully Accessible` and the reason is NULL\n"
-        "3. **GlobalID** — leading/trailing braces `{}` stripped; any still-invalid UUID is "
+        "3. **Source** — NULL or empty values replaced with `IE`\n"
+        "4. **GlobalID** — all `{` and `}` characters stripped; any still-invalid UUID is "
         "replaced with a freshly generated UUID"
     )
     st.markdown("---")
