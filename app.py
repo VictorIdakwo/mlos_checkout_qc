@@ -950,6 +950,17 @@ with st.sidebar:
     st.caption("Supported: `.sqlite` · `.csv` · `.xlsx` · `.xls`")
     st.markdown("---")
     st.markdown("#### 📋 QC Rules Reference")
+    with st.expander("🔧 Auto Correct Rules", expanded=False):
+        st.markdown("""
+| # | Field | Correction Applied |
+|---|-------|--------------------|
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani` | NULL → `NA` |
+| 2 | `reasons_for_inaccessibility` | NULL → `NA` where `accessibility_status = Fully Accessible` |
+| 3 | `source` | NULL / empty → `IE` |
+| 4 | `globalid` | `{` `}` stripped; invalid UUID → new generated UUID |
+
+> Auto Correct runs automatically **before** QC checks on every upload.
+        """)
     with st.expander("🔎 Schema Alignment Rules", expanded=False):
         st.markdown("""
 | Rule | Check |
@@ -1063,6 +1074,15 @@ if st.session_state.get("qc_cache_key") == qc_cache_key:
 else:
     qc_bar = st.progress(0, text="⏳ Starting QC checks…")
     with st.status("Running QC checks…", expanded=True) as _qc_status:
+
+        # ── Pre-step: Auto Correct ────────────────────────────────────────
+        st.write("🔧 Pre-step — Auto Correct")
+        mlos_df, _ac_log = auto_correct_mlos(mlos_df)
+        _n_fixed = sum(r["Rows Fixed"] for r in _ac_log)
+        if _ac_log:
+            st.write(f"   ✅ Auto Correct: {len(_ac_log)} correction(s) applied, {_n_fixed:,} row(s) fixed")
+        else:
+            st.write("   ✅ Auto Correct: no corrections needed")
 
         # ── Step 1: Schema Alignment ──────────────────────────────────────
         qc_bar.progress(5, text="🔎 Step 1 / 4 — Schema Alignment…")
@@ -1338,15 +1358,41 @@ with tab5:
 
         st.markdown("---")
         st.markdown("**📋 All Boundary Issue Rows (combined)**")
-        st.dataframe(boundary_detail, use_container_width=True, hide_index=True, height=350)
+        st.caption("Includes `ward_code` from the uploaded file and the matched value from the boundary reference for comparison.")
+
+        # Enrich boundary detail with boundary reference ward_code for comparison
+        enriched_detail = boundary_detail.copy()
+        if not boundary_ref.empty and "ward_code" in boundary_ref.columns:
+            ref_lookup = (
+                boundary_ref[["ward_code","ward_name","lga_code","lga_name","state_code"]]
+                .drop_duplicates("ward_code")
+                .rename(columns={
+                    "ward_code":  "Ref Ward Code",
+                    "ward_name":  "Ref Ward Name",
+                    "lga_code":   "Ref LGA Code",
+                    "lga_name":   "Ref LGA Name",
+                    "state_code": "Ref State Code",
+                })
+            )
+            if "ward_code" in enriched_detail.columns:
+                enriched_detail = enriched_detail.merge(
+                    ref_lookup,
+                    left_on="ward_code", right_on="Ref Ward Code",
+                    how="left"
+                )
+                enriched_detail["In Boundary Reference"] = enriched_detail["Ref Ward Code"].notna().map(
+                    {True: "Yes", False: "No — not found in reference"}
+                )
+
+        st.dataframe(enriched_detail, use_container_width=True, hide_index=True, height=350)
 
         buf_b = BytesIO()
         with pd.ExcelWriter(buf_b, engine="openpyxl") as xw:
-            boundary_detail.to_excel(xw, sheet_name="All Boundary Issues", index=False)
+            enriched_detail.to_excel(xw, sheet_name="All Boundary Issues", index=False)
             for check in boundary_checks:
                 if "FAIL" not in check["Status"]: continue
                 rn  = check["Rule#"]
-                sub = boundary_detail[boundary_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
+                sub = enriched_detail[enriched_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
                 sub.to_excel(xw, sheet_name=f"Rule {rn}"[:31], index=False)
         st.download_button("⬇️ Download Boundary Issues (Excel)", data=buf_b.getvalue(),
                            file_name=filename.rsplit(".",1)[0] + "_boundary_issues.xlsx",
