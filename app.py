@@ -202,6 +202,63 @@ def pct(v, t): return f"{v/t*100:.1f}%" if t else "0%"
 def is_uuid(x): return bool(UUID_RE.match(str(x).strip())) if x and str(x) != "nan" else False
 def is_editor(x): return bool(EDITOR_RE.match(str(x).strip())) if x and str(x) != "nan" else False
 
+# ─── Schema Validation ───────────────────────────────────────────────────────────
+MLOS_REQUIRED_COLS = {
+    "takeoffpoint", "takeoffpoint_code", "ward_code", "settlement_name",
+    "security_compromised", "accessibility_status", "reasons_for_inaccessibility",
+    "habitational_status", "set_target", "number_of_houses", "set_population",
+    "day_of_activity", "urban", "rural", "scattered",
+    "highrisk", "slums", "densely_populated", "hard2reach", "border",
+    "normadic", "riverine", "fulani", "team_code",
+    "source", "editor", "globalid",
+}
+TAKEOFF_REQUIRED_COLS = {"name", "code", "wardcode", "globalid"}
+
+def validate_schema(mlos: pd.DataFrame, takeoff: pd.DataFrame):
+    """
+    Compare uploaded DataFrame columns against expected schemas.
+    Returns a list of issue dicts and a summary DataFrame for download.
+    """
+    issues = []
+
+    mlos_cols    = set(mlos.columns.str.strip().str.lower())
+    missing_mlos = sorted(MLOS_REQUIRED_COLS - mlos_cols)
+    for col in missing_mlos:
+        issues.append({
+            "Table":   "MLoS",
+            "Missing Column": col,
+            "Impact": "QC rule(s) referencing this column will be skipped or may produce incorrect results",
+        })
+
+    if not takeoff.empty and len(takeoff.columns) > 0:
+        tp_cols       = set(takeoff.columns.str.strip().str.lower())
+        missing_tp    = sorted(TAKEOFF_REQUIRED_COLS - tp_cols)
+        for col in missing_tp:
+            issues.append({
+                "Table":   "Takeoffpoint",
+                "Missing Column": col,
+                "Impact": "QC rule(s) referencing this column will be skipped or may produce incorrect results",
+            })
+
+    return issues, pd.DataFrame(issues) if issues else pd.DataFrame()
+
+def build_schema_report_xlsx(issues_df: pd.DataFrame, filename: str) -> bytes:
+    """Produce a downloadable Excel report listing schema mismatches."""
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        issues_df.to_excel(writer, index=False, sheet_name="Schema Issues")
+        ws = writer.sheets["Schema Issues"]
+        header_fill = PatternFill("solid", fgColor="1D4ED8")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill   = header_fill
+            cell.font   = header_font
+            cell.alignment = Alignment(horizontal="center")
+        for col_cells in ws.columns:
+            length = max(len(str(c.value or "")) for c in col_cells) + 4
+            ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(length, 60)
+    return out.getvalue()
+
 # ─── QC Engine — MLoS ────────────────────────────────────────────────────────────
 def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
     checks, details = [], []
@@ -645,6 +702,27 @@ else:
     st.session_state["mlos_detail"] = mlos_detail
     st.session_state["tp_checks"]   = tp_checks
     st.session_state["tp_detail"]   = tp_detail
+
+# ─── SCHEMA VALIDATION ───────────────────────────────────────────────────────────
+schema_issues, schema_df = validate_schema(mlos_df, takeoff_df)
+
+if schema_issues:
+    st.error(
+        f"⚠️ **Schema Mismatch Detected** — {len(schema_issues)} column(s) are missing from the uploaded file. "
+        "QC rules that depend on these columns will be skipped or may return incorrect results. "
+        "Please fix the file and re-upload."
+    )
+    with st.expander("🔍 View Missing Columns", expanded=True):
+        st.dataframe(schema_df, use_container_width=True, hide_index=True)
+
+    schema_xlsx = build_schema_report_xlsx(schema_df, filename)
+    st.download_button(
+        label="⬇️ Download Schema Error Report (.xlsx)",
+        data=schema_xlsx,
+        file_name=filename.rsplit(".", 1)[0] + "_schema_errors.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.stop()
 
 all_checks      = mlos_checks + tp_checks
 n_fail          = sum(1 for c in all_checks if "FAIL" in c["Status"])
