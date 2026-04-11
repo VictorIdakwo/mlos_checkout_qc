@@ -159,6 +159,7 @@ Data integrity rules applied to the MLoS table.
 
 | Rule | Check | Description |
 |------|-------|-------------|
+| 5 | Required Fields — Not Null | Schema `NOT NULL` fields must not be empty: `state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `set_population`, `set_target`, `number_of_household`, `timestamp`, `settlementarea_globalid`. Detail row includes a **Null Fields** column listing which column(s) are null for each failing row. |
 | 2 | Takeoffpoint Name Match | `takeoffpoint` must match `name` in the Takeoffpoint table |
 | 3 | Takeoffpoint Code Match | `takeoffpoint_code` must match `code` in the Takeoffpoint table |
 | 4 | Ward Code Match | `ward_code` must match `wardcode` in the Takeoffpoint table |
@@ -173,7 +174,11 @@ Data integrity rules applied to the MLoS table.
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | eha_guid is UUID | `eha_guid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-> Rules 5 (No Null in Required Fields), 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 5 was removed as null checks are not enforced — `primarysettlement_name`, `alternate_name`, and `reasons_for_inaccessibility` are explicitly nullable; Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
+**Nullable fields** (not subject to null checks — schema allows NULL): `primarysettlement_name`, `alternate_name`, `reasons_for_inaccessibility`, `habitational_status`, `noncompliant_household`, `team_code`, `day_of_activity`, `source`, `last_updated`, `editor`, `validation_status`, `master_id`, `mlos_id`.
+
+**NOT NULL fields covered by their value-check rules** (null causes rule to fail): `security_compromised` → R6, `accessibility_status` → R7, `urban`/`rural`/`scattered` → R13, profile flags → R14, `eha_guid` → R17, `latitude`/`longitude` → SQ2.
+
+> Rules 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
 
 ---
 

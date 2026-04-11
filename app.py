@@ -818,6 +818,36 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
+    # R5 — Schema NOT NULL fields must not be null
+    # Covers columns whose NOT NULL constraint is not already enforced by another rule.
+    # (security_compromised, accessibility_status, urban, rural, scattered, flag cols,
+    #  eha_guid are caught by their value-check rules; latitude/longitude by SQ2.)
+    _NOT_NULL_COLS = [c for c in [
+        "state_code", "state_name", "lga_code", "lga_name", "ward_name", "ward_code",
+        "settlement_name", "set_population", "set_target", "number_of_household",
+        "timestamp", "settlementarea_globalid",
+    ] if c in mlos.columns]
+    if _NOT_NULL_COLS:
+        _null_mask = mlos[_NOT_NULL_COLS].isnull().any(axis=1)
+        _n5 = int(_null_mask.sum())
+        checks.append({
+            "Rule#": "5", "QC Check": "Required Fields — Not Null",
+            "Description": "Schema NOT NULL fields must not be empty: " + ", ".join(_NOT_NULL_COLS),
+            "Failing Rows": _n5, "Total Rows": total,
+            "Fail %": pct(_n5, total),
+            "Status": "❌ FAIL" if _n5 else "✅ PASS",
+        })
+        if _n5:
+            _cols5 = BASE + [c for c in _NOT_NULL_COLS if c not in BASE]
+            _sub5 = mlos[_null_mask][_cols5].copy()
+            _sub5.insert(0, "Rule#", "5")
+            _sub5.insert(1, "Rule", "Required Fields — Not Null")
+            _sub5["Null Fields"] = mlos[_null_mask][_NOT_NULL_COLS].apply(
+                lambda row: ", ".join(col for col in _NOT_NULL_COLS if pd.isna(row[col])),
+                axis=1,
+            )
+            details.append(_sub5)
+
     # R2
     if "takeoffpoint" in mlos.columns and "name" in takeoff.columns:
         valid = set(takeoff["name"].dropna().str.strip())
@@ -1194,6 +1224,7 @@ with st.sidebar:
         st.markdown("""
 | Rule | Check |
 |------|-------|
+| 5 | Required NOT NULL fields must not be null (`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `set_population`, `set_target`, `number_of_household`, `timestamp`, `settlementarea_globalid`) |
 | 2 | takeoffpoint == takeoffpoint.name |
 | 3 | takeoffpoint_code == takeoffpoint.code |
 | 4 | ward_code == takeoffpoint.wardcode |
