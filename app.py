@@ -492,7 +492,7 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
         merged = chk.merge(bbox_ref, on="ward_code", how="left")
         merged.index = mlos.index
 
-        has_coords   = merged["lat"].notna() & merged["lon"].notna()
+        has_coords   = merged["lat"].notna() & merged["lon"].notna() & (merged["lat"] != 0) & (merged["lon"] != 0)
         in_reference = merged["min_lon"].notna()
         out_of_box   = (
             (merged["lon"] < merged["min_lon"]) |
@@ -501,12 +501,121 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             (merged["lat"] > merged["max_lat"])
         )
         mask_b2 = has_coords & in_reference & out_of_box
-        add("B2", "Coordinates — Within Ward Boundary",
-            "latitude/longitude must fall within the bounding box of the declared ward_code",
+        add("B2", "Coordinates — Ward Boundary Intersection",
+            "latitude/longitude must fall within the bounding box of the declared ward_code "
+            "(ward_code of the intersecting boundary must equal the declared ward_code)",
             mask_b2, ["ward_code","latitude","longitude"])
+
+        # Enrich B2 detail with reverse-lookup: which ward bbox contains the failing coordinate
+        if mask_b2.any() and details:
+            _b2_detail = details[-1]
+            _bbox_lkp = filtered_bbox[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
+            for _c in ["min_lon","min_lat","max_lon","max_lat"]:
+                _bbox_lkp[_c] = pd.to_numeric(_bbox_lkp[_c], errors="coerce")
+            _bbox_lkp = _bbox_lkp.dropna()
+            _matched = []
+            for _idx in mask_b2[mask_b2].index:
+                _lv = pd.to_numeric(mlos.at[_idx, "latitude"],  errors="coerce")
+                _lnv = pd.to_numeric(mlos.at[_idx, "longitude"], errors="coerce")
+                if pd.isna(_lv) or pd.isna(_lnv):
+                    _matched.append("N/A")
+                    continue
+                _hits = _bbox_lkp[
+                    (_bbox_lkp["min_lon"] <= _lnv) & (_lnv <= _bbox_lkp["max_lon"]) &
+                    (_bbox_lkp["min_lat"] <= _lv)  & (_lv  <= _bbox_lkp["max_lat"])
+                ]["ward_code"].astype(str).tolist()
+                _matched.append(", ".join(_hits[:5]) if _hits else "No matching ward found")
+            _b2_detail["Intersecting Ward(s) from Boundary"] = _matched
 
     detail_df = pd.concat(details, ignore_index=True) if details else pd.DataFrame()
     return checks, detail_df
+
+# ─── QC Engine — Settlement ──────────────────────────────────────────────────────
+def run_settlement_qc(mlos: pd.DataFrame):
+    import numpy as np
+    checks, details = [], []
+    total  = len(mlos)
+    id_col = "ogc_fid" if "ogc_fid" in mlos.columns else mlos.columns[0]
+    BASE   = [c for c in [id_col,"state_name","lga_name","ward_code","settlement_name"]
+              if c in mlos.columns]
+
+    def add(num, rule, desc, mask, extra=None):
+        n    = int(mask.sum())
+        cols = BASE + [c for c in (extra or []) if c in mlos.columns and c not in BASE]
+        checks.append({"Rule#": num, "QC Check": rule, "Description": desc,
+                       "Failing Rows": n, "Total Rows": total,
+                       "Fail %": pct(n, total),
+                       "Status": "❌ FAIL" if n else "✅ PASS"})
+        if n:
+            sub = mlos[mask][cols].copy()
+            sub.insert(0, "Rule#", num)
+            sub.insert(1, "Rule", rule)
+            details.append(sub)
+
+    # SQ1 — settlement_name must be unique within each ward_code
+    if "settlement_name" in mlos.columns and "ward_code" in mlos.columns:
+        add("SQ1", "Duplicate Settlement Name in Ward",
+            "settlement_name must not repeat within the same ward_code",
+            mlos.duplicated(subset=["ward_code", "settlement_name"], keep=False),
+            ["ward_code", "settlement_name"])
+
+    # SQ2 — latitude and longitude must be present and non-zero
+    if "latitude" in mlos.columns and "longitude" in mlos.columns:
+        lat = pd.to_numeric(mlos["latitude"],  errors="coerce")
+        lon = pd.to_numeric(mlos["longitude"], errors="coerce")
+        add("SQ2", "Latitude/Longitude Filled and Non-Zero",
+            "latitude and longitude must be present and not equal to zero",
+            lat.isna() | lon.isna() | (lat == 0) | (lon == 0),
+            ["latitude", "longitude"])
+
+    # SQ3 — no two settlements may share identical coordinates (stacked)
+    if "latitude" in mlos.columns and "longitude" in mlos.columns:
+        lat = pd.to_numeric(mlos["latitude"],  errors="coerce")
+        lon = pd.to_numeric(mlos["longitude"], errors="coerce")
+        valid = lat.notna() & lon.notna() & (lat != 0) & (lon != 0)
+        coord_df   = pd.DataFrame({"_lat": lat, "_lon": lon})
+        stacked    = coord_df[valid].duplicated(keep=False)
+        mask_sq3   = pd.Series(False, index=mlos.index)
+        mask_sq3[stacked[stacked].index] = True
+        add("SQ3", "Stacked Coordinates",
+            "no two settlements may share identical latitude/longitude coordinates",
+            mask_sq3, ["latitude", "longitude"])
+
+    # SQ4 — every settlement must be > 30 m from every other settlement
+    if "latitude" in mlos.columns and "longitude" in mlos.columns:
+        lat = pd.to_numeric(mlos["latitude"],  errors="coerce")
+        lon = pd.to_numeric(mlos["longitude"], errors="coerce")
+        valid     = lat.notna() & lon.notna() & (lat != 0) & (lon != 0)
+        valid_idx = mlos.index[valid]
+        mask_sq4  = pd.Series(False, index=mlos.index)
+
+        if len(valid_idx) > 1:
+            R      = 6371000.0           # Earth radius in metres
+            lats_r = np.radians(lat[valid].values)
+            lons_r = np.radians(lon[valid].values)
+            n      = len(lats_r)
+            too_close = set()
+
+            for i in range(n - 1):
+                dlat = lats_r[i] - lats_r[i + 1:]
+                dlon = lons_r[i] - lons_r[i + 1:]
+                a    = (np.sin(dlat / 2) ** 2 +
+                        np.cos(lats_r[i]) * np.cos(lats_r[i + 1:]) *
+                        np.sin(dlon / 2) ** 2)
+                d    = 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+                close_j = np.where(d < 30)[0]
+                if len(close_j):
+                    too_close.add(i)
+                    too_close.update(int(i + 1 + j) for j in close_j)
+
+            for k in too_close:
+                mask_sq4[valid_idx[k]] = True
+
+        add("SQ4", "Settlements Too Close (< 30 m)",
+            "each settlement must be more than 30 metres from all other settlements",
+            mask_sq4, ["ward_code", "settlement_name", "latitude", "longitude"])
+
+    return checks, pd.concat(details) if details else pd.DataFrame()
 
 # ─── Email Sender ─────────────────────────────────────────────────────────────────
 def send_qc_email(filename: str, all_checks: list, mlos_fail_rows: int,
@@ -1062,7 +1171,7 @@ with st.sidebar:
         st.markdown("""
 | Rule | Check |
 |------|-------|
-| S1 | All 41 required MLoS columns present |
+| S1 | All 43 required MLoS columns present |
 | S2 | All 4 required Takeoffpoint columns present |
 
 **MLoS required columns:**
@@ -1088,6 +1197,15 @@ with st.sidebar:
 | 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, nomadic, riverine, fulani) |
 | 16 | editor = firstname.surname (lowercase) |
 | 17 | eha_guid = valid UUID |
+        """)
+    with st.expander("📐 Settlement QC Rules", expanded=False):
+        st.markdown("""
+| Rule | Check |
+|------|-------|
+| SQ1 | settlement_name must be unique within each ward_code |
+| SQ2 | latitude and longitude must be present and not equal to zero |
+| SQ3 | No two settlements may share identical coordinates (stacked) |
+| SQ4 | Every settlement must be > 30 m from every other settlement |
         """)
     with st.expander("📍 Takeoffpoint Rules", expanded=False):
         st.markdown("""
@@ -1181,14 +1299,16 @@ qc_cache_key = _current_key
 boundary_ref, boundary_bbox = load_boundary_refs()
 
 if st.session_state.get("qc_cache_key") == qc_cache_key:
-    schema_checks    = st.session_state["schema_checks"]
-    schema_detail    = st.session_state["schema_detail"]
-    mlos_checks      = st.session_state["mlos_checks"]
-    mlos_detail      = st.session_state["mlos_detail"]
-    tp_checks        = st.session_state["tp_checks"]
-    tp_detail        = st.session_state["tp_detail"]
-    boundary_checks  = st.session_state["boundary_checks"]
-    boundary_detail  = st.session_state["boundary_detail"]
+    schema_checks      = st.session_state["schema_checks"]
+    schema_detail      = st.session_state["schema_detail"]
+    mlos_checks        = st.session_state["mlos_checks"]
+    mlos_detail        = st.session_state["mlos_detail"]
+    settlement_checks  = st.session_state["settlement_checks"]
+    settlement_detail  = st.session_state["settlement_detail"]
+    tp_checks          = st.session_state["tp_checks"]
+    tp_detail          = st.session_state["tp_detail"]
+    boundary_checks    = st.session_state["boundary_checks"]
+    boundary_detail    = st.session_state["boundary_detail"]
     load_progress.progress(100)
 else:
     qc_bar = st.progress(0, text="⏳ Starting QC checks…")
@@ -1203,27 +1323,36 @@ else:
         else:
             st.write("   ✅ Auto Correct: no corrections needed")
 
-        # ── Step 1: Schema Alignment ──────────────────────────────────────
-        qc_bar.progress(5, text="🔎 Step 1 / 4 — Schema Alignment…")
-        st.write("🔎 Step 1 / 4 — Schema Alignment")
+        # ── Step 1 / 5: Schema Alignment ─────────────────────────────────
+        qc_bar.progress(5, text="🔎 Step 1 / 5 — Schema Alignment…")
+        st.write("🔎 Step 1 / 5 — Schema Alignment")
         schema_checks, schema_detail = run_schema_qc(mlos_df, takeoff_df)
         schema_fail = sum(1 for c in schema_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if schema_fail else '✅'} Schema: "
                  f"{len(schema_checks) - schema_fail}/{len(schema_checks)} checks passed")
-        qc_bar.progress(25, text="✅ Step 1 / 4 — Schema Alignment complete")
+        qc_bar.progress(20, text="✅ Step 1 / 5 — Schema Alignment complete")
 
-        # ── Step 2: MLoS Rules ────────────────────────────────────────────
-        qc_bar.progress(26, text="🏘️ Step 2 / 4 — MLoS Rules…")
-        st.write("🏘️ Step 2 / 4 — MLoS Rules")
+        # ── Step 2 / 5: MLoS Rules ───────────────────────────────────────
+        qc_bar.progress(21, text="🏘️ Step 2 / 5 — MLoS Rules…")
+        st.write("🏘️ Step 2 / 5 — MLoS Rules")
         mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
         mlos_qc_fail = sum(1 for c in mlos_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if mlos_qc_fail else '✅'} MLoS: "
                  f"{len(mlos_checks) - mlos_qc_fail}/{len(mlos_checks)} checks passed")
-        qc_bar.progress(50, text="✅ Step 2 / 4 — MLoS Rules complete")
+        qc_bar.progress(40, text="✅ Step 2 / 5 — MLoS Rules complete")
 
-        # ── Step 3: Takeoffpoint Rules ────────────────────────────────────
-        qc_bar.progress(51, text="📍 Step 3 / 4 — Takeoffpoint Rules…")
-        st.write("📍 Step 3 / 4 — Takeoffpoint Rules")
+        # ── Step 3 / 5: Settlement QC ────────────────────────────────────
+        qc_bar.progress(41, text="📐 Step 3 / 5 — Settlement QC…")
+        st.write("📐 Step 3 / 5 — Settlement QC")
+        settlement_checks, settlement_detail = run_settlement_qc(mlos_df)
+        sq_fail = sum(1 for c in settlement_checks if "FAIL" in c["Status"])
+        st.write(f"   {'❌' if sq_fail else '✅'} Settlement: "
+                 f"{len(settlement_checks) - sq_fail}/{len(settlement_checks)} checks passed")
+        qc_bar.progress(60, text="✅ Step 3 / 5 — Settlement QC complete")
+
+        # ── Step 4 / 5: Takeoffpoint Rules ───────────────────────────────
+        qc_bar.progress(61, text="📍 Step 4 / 5 — Takeoffpoint Rules…")
+        st.write("📍 Step 4 / 5 — Takeoffpoint Rules")
         if takeoff_df.empty:
             tp_checks, tp_detail = [], pd.DataFrame()
             st.write("   ⚠️ Takeoffpoint data not available — skipped")
@@ -1232,11 +1361,11 @@ else:
             tp_qc_fail = sum(1 for c in tp_checks if "FAIL" in c["Status"])
             st.write(f"   {'❌' if tp_qc_fail else '✅'} Takeoffpoint: "
                      f"{len(tp_checks) - tp_qc_fail}/{len(tp_checks)} checks passed")
-        qc_bar.progress(75, text="✅ Step 3 / 4 — Takeoffpoint Rules complete")
+        qc_bar.progress(80, text="✅ Step 4 / 5 — Takeoffpoint Rules complete")
 
-        # ── Step 4: Boundary Checks ───────────────────────────────────────
-        qc_bar.progress(76, text="🗺️ Step 4 / 4 — Boundary Checks…")
-        st.write("🗺️ Step 4 / 4 — Boundary Checks")
+        # ── Step 5 / 5: Boundary Checks ──────────────────────────────────
+        qc_bar.progress(81, text="🗺️ Step 5 / 5 — Boundary Checks…")
+        st.write("🗺️ Step 5 / 5 — Boundary Checks")
         boundary_checks, boundary_detail = run_ward_boundary_qc(mlos_df, boundary_ref, boundary_bbox)
         b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if b_fail else '✅'} Boundary: "
@@ -1245,32 +1374,36 @@ else:
 
         load_progress.progress(100)
         _qc_status.update(label="QC checks complete!", state="complete", expanded=False)
-    st.session_state["qc_cache_key"]   = qc_cache_key
-    st.session_state["schema_checks"]  = schema_checks
-    st.session_state["schema_detail"]  = schema_detail
-    st.session_state["mlos_checks"]    = mlos_checks
-    st.session_state["mlos_detail"]    = mlos_detail
-    st.session_state["tp_checks"]      = tp_checks
-    st.session_state["tp_detail"]      = tp_detail
-    st.session_state["boundary_checks"]= boundary_checks
-    st.session_state["boundary_detail"]= boundary_detail
+    st.session_state["qc_cache_key"]       = qc_cache_key
+    st.session_state["schema_checks"]      = schema_checks
+    st.session_state["schema_detail"]      = schema_detail
+    st.session_state["mlos_checks"]        = mlos_checks
+    st.session_state["mlos_detail"]        = mlos_detail
+    st.session_state["settlement_checks"]  = settlement_checks
+    st.session_state["settlement_detail"]  = settlement_detail
+    st.session_state["tp_checks"]          = tp_checks
+    st.session_state["tp_detail"]          = tp_detail
+    st.session_state["boundary_checks"]    = boundary_checks
+    st.session_state["boundary_detail"]    = boundary_detail
 
-all_checks          = schema_checks + mlos_checks + tp_checks + boundary_checks
-n_fail              = sum(1 for c in all_checks if "FAIL" in c["Status"])
-n_pass              = len(all_checks) - n_fail
-pct_pass            = f"{n_pass / len(all_checks) * 100:.1f}%" if all_checks else "0%"
-pct_fail            = f"{n_fail / len(all_checks) * 100:.1f}%" if all_checks else "0%"
-mlos_fail_rows      = len(mlos_detail)
-tp_fail_rows        = len(tp_detail)
-boundary_fail_rows  = len(boundary_detail)
+all_checks         = schema_checks + mlos_checks + settlement_checks + tp_checks + boundary_checks
+n_fail             = sum(1 for c in all_checks if "FAIL" in c["Status"])
+n_pass             = len(all_checks) - n_fail
+pct_pass           = f"{n_pass / len(all_checks) * 100:.1f}%" if all_checks else "0%"
+pct_fail           = f"{n_fail / len(all_checks) * 100:.1f}%" if all_checks else "0%"
+mlos_fail_rows     = len(mlos_detail)
+settlement_fail_rows = len(settlement_detail)
+tp_fail_rows       = len(tp_detail)
+boundary_fail_rows = len(boundary_detail)
 
-# ── Weighted Score ──────────────────────────────────────────────────────────────────
-# Weights: Schema 10%, MLoS 50%, Takeoffpoint 30%, Boundary 10%
+# ── Weighted Score ───────────────────────────────────────────────────────────────
+# Schema 10% | MLoS 40% | Settlement 20% | Takeoffpoint 20% | Boundary 10%
 LAYER_WEIGHTS = {
-    "schema":   0.10,
-    "mlos":     0.50,
-    "tp":       0.30,
-    "boundary": 0.10,
+    "schema":     0.10,
+    "mlos":       0.40,
+    "settlement": 0.20,
+    "tp":         0.20,
+    "boundary":   0.10,
 }
 
 def _layer_pass_rate(checks):
@@ -1279,11 +1412,12 @@ def _layer_pass_rate(checks):
     passing = sum(1 for c in checks if "FAIL" not in c["Status"])
     return passing / len(checks)
 
-schema_score   = _layer_pass_rate(schema_checks)   * LAYER_WEIGHTS["schema"]   * 100
-mlos_score     = _layer_pass_rate(mlos_checks)     * LAYER_WEIGHTS["mlos"]     * 100
-tp_score       = _layer_pass_rate(tp_checks)       * LAYER_WEIGHTS["tp"]       * 100
-boundary_score = _layer_pass_rate(boundary_checks) * LAYER_WEIGHTS["boundary"] * 100
-weighted_score = schema_score + mlos_score + tp_score + boundary_score
+schema_score     = _layer_pass_rate(schema_checks)     * LAYER_WEIGHTS["schema"]     * 100
+mlos_score       = _layer_pass_rate(mlos_checks)     * LAYER_WEIGHTS["mlos"]       * 100
+settlement_score = _layer_pass_rate(settlement_checks) * LAYER_WEIGHTS["settlement"] * 100
+tp_score         = _layer_pass_rate(tp_checks)       * LAYER_WEIGHTS["tp"]         * 100
+boundary_score   = _layer_pass_rate(boundary_checks) * LAYER_WEIGHTS["boundary"]   * 100
+weighted_score   = schema_score + mlos_score + settlement_score + tp_score + boundary_score
 
 # ─── FILE INFO + METRICS ──────────────────────────────────────────────────────────
 st.success(f"✅ Loaded **{filename}** — MLoS: **{len(mlos_df):,} rows** | Takeoffpoint: **{len(takeoff_df):,} rows**")
@@ -1294,7 +1428,7 @@ c2.metric("📍 TP Rows",          f"{len(takeoff_df):,}")
 c3.metric("🔍 Checks Run",       f"{len(all_checks)}")
 c4.metric("✅ Passing",          f"{n_pass}")
 c5.metric("❌ Failing",          f"{n_fail}")
-c6.metric("⚠️ Issue Rows",      f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
+c6.metric("⚠️ Issue Rows",      f"{mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
 c7.metric("📈 Pass Rate",        pct_pass)
 c8.metric("📉 Fail Rate",        pct_fail)
 c9.metric("🏆 Weighted Score",   f"{weighted_score:.1f}%")
@@ -1308,15 +1442,17 @@ if n_fail == 0:
 else:
     st.markdown(
         f'<div class="banner-fail">❌ {n_fail} QC CHECK(S) FAILING — '
-        f'{mlos_fail_rows} MLoS rows and {tp_fail_rows} Takeoffpoint rows have issues. '
+        f'{mlos_fail_rows} MLoS rows, {settlement_fail_rows} Settlement rows, '
+        f'{tp_fail_rows} Takeoffpoint rows, and {boundary_fail_rows} Boundary rows have issues. '
         f'Review details below before submission.</div>',
         unsafe_allow_html=True)
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🔧 Auto Correct",
     "📊 QC Summary",
     "🏘️ MLoS Issues",
+    "📐 Settlement QC",
     "📍 Takeoffpoint Issues",
     "🗺️ Boundary Issues",
     "🔍 Raw Data",
@@ -1344,11 +1480,12 @@ with tab2:
     )
 
     score_rows = [
-        {"QC Layer": "🔎 Schema Alignment",  "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(schema_checks)*100:.1f}%",   "Weighted Contribution": f"{schema_score:.1f}%"},
-        {"QC Layer": "🏘️ MLoS Rules",        "Weight": "50%", "Layer Pass Rate": f"{_layer_pass_rate(mlos_checks)*100:.1f}%",     "Weighted Contribution": f"{mlos_score:.1f}%"},
-        {"QC Layer": "📍 Takeoffpoint Rules", "Weight": "30%", "Layer Pass Rate": f"{_layer_pass_rate(tp_checks)*100:.1f}%",       "Weighted Contribution": f"{tp_score:.1f}%"},
-        {"QC Layer": "🗺️ Boundary Checks",   "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(boundary_checks)*100:.1f}%", "Weighted Contribution": f"{boundary_score:.1f}%"},
-        {"QC Layer": "🏆 Total",              "Weight": "100%","Layer Pass Rate": "—",                                             "Weighted Contribution": f"{weighted_score:.1f}%"},
+        {"QC Layer": "🔎 Schema Alignment",  "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(schema_checks)*100:.1f}%",     "Weighted Contribution": f"{schema_score:.1f}%"},
+        {"QC Layer": "🏘️ MLoS Rules",        "Weight": "40%", "Layer Pass Rate": f"{_layer_pass_rate(mlos_checks)*100:.1f}%",       "Weighted Contribution": f"{mlos_score:.1f}%"},
+        {"QC Layer": "📐 Settlement QC",      "Weight": "20%", "Layer Pass Rate": f"{_layer_pass_rate(settlement_checks)*100:.1f}%", "Weighted Contribution": f"{settlement_score:.1f}%"},
+        {"QC Layer": "📍 Takeoffpoint Rules", "Weight": "20%", "Layer Pass Rate": f"{_layer_pass_rate(tp_checks)*100:.1f}%",         "Weighted Contribution": f"{tp_score:.1f}%"},
+        {"QC Layer": "🗺️ Boundary Checks",   "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(boundary_checks)*100:.1f}%",   "Weighted Contribution": f"{boundary_score:.1f}%"},
+        {"QC Layer": "🏆 Total",              "Weight": "100%","Layer Pass Rate": "—",                                               "Weighted Contribution": f"{weighted_score:.1f}%"},
     ]
     st.dataframe(pd.DataFrame(score_rows), use_container_width=True, hide_index=True)
 
@@ -1381,6 +1518,12 @@ with tab2:
     if mlos_checks:
         df_m = pd.DataFrame(mlos_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
         st.dataframe(df_m.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">📐 Settlement QC — Results</div>', unsafe_allow_html=True)
+    if settlement_checks:
+        df_sq = pd.DataFrame(settlement_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
+        st.dataframe(df_sq.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="sec-title">📍 Takeoffpoint Table — QC Results</div>', unsafe_allow_html=True)
@@ -1476,8 +1619,42 @@ with tab3:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-# ── Tab 4: Takeoffpoint Issues ────────────────────────────────────────────────────
+# ── Tab 4: Settlement QC Issues ───────────────────────────────────────────────────
 with tab4:
+    if settlement_detail.empty:
+        st.success("✅ No Settlement QC issues found — all checks passed!")
+    else:
+        n_failing_sq = sum(1 for c in settlement_checks if "FAIL" in c["Status"])
+        st.error(f"❌ **{settlement_fail_rows:,} issue row(s)** across **{n_failing_sq} failing check(s)**")
+
+        for check in settlement_checks:
+            if "FAIL" not in check["Status"]: continue
+            rn     = check["Rule#"]
+            subset = settlement_detail[settlement_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
+            n      = len(subset)
+            with st.expander(f"❌  Rule {rn} — {check['QC Check']}  ({n:,} row{'s' if n!=1 else ''})", expanded=False):
+                st.caption(f"📌 {check['Description']}")
+                st.dataframe(subset, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**📋 All Settlement QC Issue Rows (combined)**")
+        st.dataframe(settlement_detail.drop(columns=["Rule#","Rule"], errors="ignore"),
+                     use_container_width=True, hide_index=True, height=350)
+
+        buf_sq = BytesIO()
+        with pd.ExcelWriter(buf_sq, engine="openpyxl") as xw:
+            settlement_detail.to_excel(xw, sheet_name="All Settlement Issues", index=False)
+            for check in settlement_checks:
+                if "FAIL" not in check["Status"]: continue
+                rn  = check["Rule#"]
+                sub = settlement_detail[settlement_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
+                sub.to_excel(xw, sheet_name=f"Rule {rn}"[:31], index=False)
+        st.download_button("⬇️ Download Settlement QC Issues (Excel)", data=buf_sq.getvalue(),
+                           file_name=filename.rsplit(".",1)[0] + "_settlement_issues.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ── Tab 5: Takeoffpoint Issues ────────────────────────────────────────────────────
+with tab5:
     if tp_detail.empty:
         st.success("✅ No issues found in the Takeoffpoint table — all checks passed!")
     else:
@@ -1509,8 +1686,8 @@ with tab4:
                            file_name=filename.replace(".sqlite","")+"_tp_issues.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Tab 5: Boundary Issues ────────────────────────────────────────────────────────
-with tab5:
+# ── Tab 6: Boundary Issues ────────────────────────────────────────────────────────
+with tab6:
     n_b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
     if n_b_fail == 0:
         st.success("✅ All ward codes match the boundary reference and all coordinates fall within their declared ward boundaries.")
@@ -1577,8 +1754,8 @@ with tab5:
                            file_name=filename.rsplit(".",1)[0] + "_boundary_issues.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Tab 6: Raw Data ───────────────────────────────────────────────────────────────
-with tab6:
+# ── Tab 7: Raw Data ───────────────────────────────────────────────────────────────
+with tab7:
     rt1, rt2 = st.tabs(["🏘️ MLoS View", "📍 Takeoffpoint View"])
     with rt1:
         st.markdown(f"**{len(mlos_df):,} rows × {len(mlos_df.columns)} columns**")
@@ -1611,8 +1788,8 @@ with tab6:
         st.markdown(f"**{len(takeoff_df):,} rows × {len(takeoff_df.columns)} columns**")
         st.dataframe(takeoff_df, use_container_width=True, hide_index=True, height=420)
 
-# ── Tab 7: Generate Report ────────────────────────────────────────────────────────
-with tab7:
+# ── Tab 8: Generate Report ────────────────────────────────────────────────────────
+with tab8:
     st.markdown('<div class="sec-title">📄 QC Report — Summary &amp; Download</div>', unsafe_allow_html=True)
 
     # Verdict
@@ -1623,15 +1800,17 @@ with tab7:
     else:
         st.markdown(
             f'<div class="report-verdict-fail">❌ &nbsp; {n_fail} CHECK(S) FAILING — '
-            f'{mlos_fail_rows + tp_fail_rows} total issue rows. Fix before submission.</div>',
+            f'{mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows} total issue rows. Fix before submission.</div>',
             unsafe_allow_html=True)
 
     # Metadata card
     gen_time      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    mlos_n_fail   = sum(1 for c in mlos_checks if "FAIL" in c["Status"])
-    mlos_n_pass   = len(mlos_checks) - mlos_n_fail
-    tp_n_fail     = sum(1 for c in tp_checks   if "FAIL" in c["Status"])
-    tp_n_pass     = len(tp_checks)   - tp_n_fail
+    mlos_n_fail   = sum(1 for c in mlos_checks       if "FAIL" in c["Status"])
+    mlos_n_pass   = len(mlos_checks)   - mlos_n_fail
+    sq_n_fail     = sum(1 for c in settlement_checks if "FAIL" in c["Status"])
+    sq_n_pass     = len(settlement_checks) - sq_n_fail
+    tp_n_fail     = sum(1 for c in tp_checks         if "FAIL" in c["Status"])
+    tp_n_pass     = len(tp_checks)     - tp_n_fail
 
     def rrow(lbl, val, cls="val"):
         return (f'<div class="report-row">'
@@ -1652,6 +1831,12 @@ with tab7:
         rrow("MLoS Issue Rows",            f"{mlos_fail_rows:,}",
                                             "val-fail" if mlos_fail_rows else "val-pass"),
         rrow("━" * 36,                     "", "val-div"),
+        rrow("Settlement Checks Run",      str(len(settlement_checks))),
+        rrow("Settlement Checks ✅ Passing", str(sq_n_pass),  "val-pass"),
+        rrow("Settlement Checks ❌ Failing", str(sq_n_fail),  "val-fail" if sq_n_fail else "val-pass"),
+        rrow("Settlement Issue Rows",      f"{settlement_fail_rows:,}",
+                                            "val-fail" if settlement_fail_rows else "val-pass"),
+        rrow("━" * 36,                     "", "val-div"),
         rrow("Takeoffpoint Checks Run",    str(len(tp_checks))),
         rrow("Takeoffpoint Checks ✅ Passing", str(tp_n_pass),  "val-pass"),
         rrow("Takeoffpoint Checks ❌ Failing", str(tp_n_fail),  "val-fail" if tp_n_fail else "val-pass"),
@@ -1660,19 +1845,26 @@ with tab7:
     ])
     st.markdown(f'<div class="report-card">{html}</div>', unsafe_allow_html=True)
 
-    # Side-by-side check breakdown
-    col_a, col_b = st.columns(2)
+    # Three-column check breakdown
+    col_a, col_b, col_c = st.columns(3)
+    def hl(row):
+        return (["color:#be123c; font-weight:700"] + [""]*4 if "FAIL" in str(row.get("Status",""))
+                else ["color:#15803d; font-weight:700"] + [""]*4)
     with col_a:
         st.markdown("**🏘️ MLoS Check Breakdown**")
         tbl_m = pd.DataFrame([{"Status": c["Status"], "Rule#": c["Rule#"],
                                 "QC Check": c["QC Check"], "Failing": c["Failing Rows"],
                                 "Fail %": c["Fail %"]} for c in mlos_checks])
-        def hl(row):
-            return (["color:#be123c; font-weight:700"] + [""]*4 if "FAIL" in str(row.get("Status",""))
-                    else ["color:#15803d; font-weight:700"] + [""]*4)
         st.dataframe(tbl_m.style.apply(hl, axis=1), use_container_width=True, hide_index=True)
 
     with col_b:
+        st.markdown("**📐 Settlement Check Breakdown**")
+        tbl_sq = pd.DataFrame([{"Status": c["Status"], "Rule#": c["Rule#"],
+                                 "QC Check": c["QC Check"], "Failing": c["Failing Rows"],
+                                 "Fail %": c["Fail %"]} for c in settlement_checks])
+        st.dataframe(tbl_sq.style.apply(hl, axis=1), use_container_width=True, hide_index=True)
+
+    with col_c:
         st.markdown("**📍 Takeoffpoint Check Breakdown**")
         tbl_t = pd.DataFrame([{"Status": c["Status"], "Rule#": c["Rule#"],
                                 "QC Check": c["QC Check"], "Failing": c["Failing Rows"],
@@ -1704,7 +1896,7 @@ with tab7:
         st.success("✅ File is CLEAN — all checks passed.")
     else:
         st.warning(f"⚠️ {n_fail} check(s) failing with "
-                   f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows} issue rows. "
+                   f"{mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows} issue rows. "
                    f"Fix and re-upload before submission.")
 
     st.markdown("---")

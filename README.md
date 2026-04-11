@@ -9,9 +9,10 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 - Upload `.sqlite`, `.csv`, `.xlsx`, or `.xls` checkout files
 - **🔧 Auto Correct** runs before every QC — fixes common data issues and exports a corrected file
 - **Step-by-step progress bar** displayed during QC run
-- **4 QC Layers** run automatically on upload:
+- **5 QC Layers** run automatically on upload:
   - 🔎 **Schema Alignment** — verifies all required columns are present
   - 🏘️ **MLoS Rules** — data integrity and cross-table checks
+  - 📐 **Settlement QC** — duplicate detection, coordinate presence, stacking, and proximity checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
   - 🗺️ **Boundary Checks** — null ward code detection, ward code existence, coordinate, and state name validation against 9,410-ward admin boundary reference
 - **Pass Rate %, Fail Rate %, and 🏆 Weighted QC Score** displayed on the dashboard
@@ -42,10 +43,11 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 | 🔧 Auto Correct | Correction log + full corrected MLoS download (always available) |
 | 📊 QC Summary | Weighted QC Score breakdown, pass/fail per rule, failing row counts, Pass Rate %, Fail Rate % |
 | 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule) |
+| 📐 Settlement QC | Row-level drilldown for each failing settlement check (duplicates, coordinates, proximity) |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
 | 🗺️ Boundary Issues | Null/missing ward codes (B0), unmatched ward codes (B1), out-of-boundary coordinates (B2), state name mismatches (B3), with boundary reference comparison columns |
 | 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
-| 📄 Generate Report | Full QC verdict, 7-sheet Excel report download, and Send Email button |
+| 📄 Generate Report | Full QC verdict, Excel report download, and Send Email button |
 
 ---
 
@@ -64,10 +66,11 @@ A **labelled progress bar** tracks each step:
 | Step | Progress | Layer |
 |------|----------|-------|
 | Pre-step | — | 🔧 Auto Correct |
-| Step 1 / 4 | 5% → 25% | 🔎 Schema Alignment |
-| Step 2 / 4 | 26% → 50% | 🏘️ MLoS Rules |
-| Step 3 / 4 | 51% → 75% | 📍 Takeoffpoint Rules |
-| Step 4 / 4 | 76% → 100% | 🗺️ Boundary Checks |
+| Step 1 / 5 | 5% → 20% | 🔎 Schema Alignment |
+| Step 2 / 5 | 21% → 40% | 🏘️ MLoS Rules |
+| Step 3 / 5 | 41% → 60% | 📐 Settlement QC |
+| Step 4 / 5 | 61% → 80% | 📍 Takeoffpoint Rules |
+| Step 5 / 5 | 81% → 100% | 🗺️ Boundary Checks |
 
 ---
 
@@ -174,7 +177,20 @@ Data integrity rules applied to the MLoS table.
 
 ---
 
-### 5. Takeoffpoint QC Checks (Rules TP2–TP5)
+### 5. Settlement QC Checks (Rules SQ1–SQ4)
+
+Spatial integrity checks applied to the MLoS settlement records.
+
+| Rule | Check | Description |
+|------|-------|-------------|
+| SQ1 | Duplicate Settlement Name in Ward | `settlement_name` must not repeat within the same `ward_code` |
+| SQ2 | Latitude/Longitude Filled and Non-Zero | `latitude` and `longitude` must be present and not equal to zero |
+| SQ3 | Stacked Coordinates | No two settlements may share identical `latitude`/`longitude` coordinates |
+| SQ4 | Settlements Too Close (< 30 m) | Every settlement must be more than 30 metres from all other settlements (Haversine distance) |
+
+---
+
+### 6. Takeoffpoint QC Checks (Rules TP2–TP5)
 
 Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
@@ -189,7 +205,7 @@ Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
 ---
 
-### 6. Boundary Checks (Rules B0–B3)
+### 7. Boundary Checks (Rules B0–B3)
 
 Spatial and reference validation against the admin ward boundary dataset (9,410 wards).
 
@@ -220,15 +236,16 @@ Reference files bundled in the repo:
 
 ---
 
-### 7. Weighted QC Score
+### 8. Weighted QC Score
 
 After all 4 layers run, the app calculates a **Weighted QC Score** that reflects the relative importance of each layer:
 
 | QC Layer | Weight |
 |----------|--------|
 | 🔎 Schema Alignment | 10% |
-| 🏘️ MLoS Rules | 50% |
-| 📍 Takeoffpoint Rules | 30% |
+| 🏘️ MLoS Rules | 40% |
+| 📐 Settlement QC | 20% |
+| 📍 Takeoffpoint Rules | 20% |
 | 🗺️ Boundary Checks | 10% |
 
 **How it's calculated:**
@@ -236,8 +253,9 @@ After all 4 layers run, the app calculates a **Weighted QC Score** that reflects
 For each layer, the *layer pass rate* = number of passing rules ÷ total rules in that layer. The weighted contribution = layer pass rate × layer weight × 100.
 
 ```
-Weighted Score = (Schema Pass Rate × 10%) + (MLoS Pass Rate × 50%)
-               + (TP Pass Rate × 30%)      + (Boundary Pass Rate × 10%)
+Weighted Score = (Schema Pass Rate × 10%) + (MLoS Pass Rate × 40%)
+               + (Settlement Pass Rate × 20%) + (TP Pass Rate × 20%)
+               + (Boundary Pass Rate × 10%)
 ```
 
 > If a layer has no applicable checks (e.g. Takeoffpoint rules skipped for CSV uploads), that layer receives **full credit** (100% pass rate) so the score is not unfairly penalised.
@@ -252,7 +270,7 @@ The score and a breakdown table are shown in the **📊 QC Summary** tab. The �
 
 ---
 
-### 8. MLoS Issues — Longitudinal View
+### 9. MLoS Issues — Longitudinal View
 
 The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settlement rows that failed at least one rule:
 
@@ -264,7 +282,7 @@ The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settle
 
 ---
 
-### 9. Generate & Download Report
+### 10. Generate & Download Report
 
 Go to the **Generate Report** tab to:
 
@@ -276,7 +294,7 @@ The report file is named: `{filename}_QC_Report.xlsx`
 
 ---
 
-### 10. Send QC Email
+### 11. Send QC Email
 
 Click **Send QC Email** in the Generate Report tab to notify the data team.
 
