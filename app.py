@@ -818,138 +818,141 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # R5 — Schema NOT NULL fields must not be null
-    # Covers columns whose NOT NULL constraint is not already enforced by another rule.
-    # (security_compromised, accessibility_status, urban, rural, scattered, flag cols,
-    #  eha_guid are caught by their value-check rules; latitude/longitude by SQ2.)
+    # R1 — All schema NOT NULL fields must not be null
+    # Full list of 28 NOT NULL columns from the PostgreSQL schema.
     _NOT_NULL_COLS = [c for c in [
         "state_code", "state_name", "lga_code", "lga_name", "ward_name", "ward_code",
-        "settlement_name", "set_population", "set_target", "number_of_household",
-        "timestamp", "settlementarea_globalid",
+        "settlement_name", "latitude", "longitude",
+        "security_compromised", "accessibility_status",
+        "set_population", "set_target", "number_of_household",
+        "urban", "rural", "scattered",
+        "highrisk", "slums", "densely_populated", "hard2reach",
+        "border", "nomadic", "riverine", "fulani",
+        "timestamp", "eha_guid", "settlementarea_globalid",
     ] if c in mlos.columns]
     if _NOT_NULL_COLS:
         _null_mask = mlos[_NOT_NULL_COLS].isnull().any(axis=1)
-        _n5 = int(_null_mask.sum())
+        _n1 = int(_null_mask.sum())
         checks.append({
-            "Rule#": "5", "QC Check": "Required Fields — Not Null",
-            "Description": "Schema NOT NULL fields must not be empty: " + ", ".join(_NOT_NULL_COLS),
-            "Failing Rows": _n5, "Total Rows": total,
-            "Fail %": pct(_n5, total),
-            "Status": "❌ FAIL" if _n5 else "✅ PASS",
+            "Rule#": "1", "QC Check": "Required Fields — Not Null",
+            "Description": "All schema NOT NULL fields must not be empty: " + ", ".join(_NOT_NULL_COLS),
+            "Failing Rows": _n1, "Total Rows": total,
+            "Fail %": pct(_n1, total),
+            "Status": "❌ FAIL" if _n1 else "✅ PASS",
         })
-        if _n5:
-            _cols5 = BASE + [c for c in _NOT_NULL_COLS if c not in BASE]
-            _sub5 = mlos[_null_mask][_cols5].copy()
-            _sub5.insert(0, "Rule#", "5")
-            _sub5.insert(1, "Rule", "Required Fields — Not Null")
-            _sub5["Null Fields"] = mlos[_null_mask][_NOT_NULL_COLS].apply(
+        if _n1:
+            _cols1 = BASE + [c for c in _NOT_NULL_COLS if c not in BASE]
+            _sub1 = mlos[_null_mask][_cols1].copy()
+            _sub1.insert(0, "Rule#", "1")
+            _sub1.insert(1, "Rule", "Required Fields — Not Null")
+            _sub1["Null Fields"] = mlos[_null_mask][_NOT_NULL_COLS].apply(
                 lambda row: ", ".join(col for col in _NOT_NULL_COLS if pd.isna(row[col])),
                 axis=1,
             )
-            details.append(_sub5)
+            details.append(_sub1)
 
-    # R2
+    # R2 — Takeoffpoint Name Match
     if "takeoffpoint" in mlos.columns and "name" in takeoff.columns:
         valid = set(takeoff["name"].dropna().str.strip())
-        add("2","Takeoffpoint Name Match",
+        add("2", "Takeoffpoint Name Match",
             "takeoffpoint in MLoS must match name in Takeoffpoint table",
             ~mlos["takeoffpoint"].astype(str).str.strip().isin(valid), ["takeoffpoint"])
 
-    # R3
+    # R3 — Takeoffpoint Code Match
     if "takeoffpoint_code" in mlos.columns and "code" in takeoff.columns:
         valid = set(takeoff["code"].dropna().str.strip())
-        add("3","Takeoffpoint Code Match",
+        add("3", "Takeoffpoint Code Match",
             "takeoffpoint_code in MLoS must match code in Takeoffpoint table",
             ~mlos["takeoffpoint_code"].astype(str).str.strip().isin(valid), ["takeoffpoint_code"])
 
-    # R4
+    # R4 — Ward Code Match
     if "ward_code" in mlos.columns and "wardcode" in takeoff.columns:
         valid = set(takeoff["wardcode"].dropna().str.strip())
-        add("4","Ward Code Match",
+        add("4", "Ward Code Match",
             "ward_code in MLoS must match wardcode in Takeoffpoint table",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid), ["ward_code"])
 
-    # R6
+    # R5 — Security Compromised Y/N
     if "security_compromised" in mlos.columns:
-        add("6","Security Compromised Y/N",
+        add("5", "Security Compromised Y/N",
             "security_compromised must be Y or N",
-            ~mlos["security_compromised"].astype(str).str.strip().isin({"Y","N"}),
+            ~mlos["security_compromised"].astype(str).str.strip().isin({"Y", "N"}),
             ["security_compromised"])
 
-    # R7
+    # R6 — Accessibility Status Valid
     if "accessibility_status" in mlos.columns:
-        add("7","Accessibility Status Valid",
+        add("6", "Accessibility Status Valid",
             "accessibility_status must be: Fully Accessible, Partially Accessible, or Inaccessible",
             ~mlos["accessibility_status"].astype(str).str.strip().isin(VALID_ACC),
             ["accessibility_status"])
 
-    # R8
+    # R7 — Reason for Inaccessibility Required
     if "accessibility_status" in mlos.columns and "reasons_for_inaccessibility" in mlos.columns:
-        needs     = mlos["accessibility_status"].isin(["Partially Accessible","Inaccessible"])
+        needs     = mlos["accessibility_status"].isin(["Partially Accessible", "Inaccessible"])
         no_reason = (mlos["reasons_for_inaccessibility"].isna() |
                      mlos["reasons_for_inaccessibility"].astype(str).str.strip().eq(""))
-        add("8","Reason for Inaccessibility Required",
+        add("7", "Reason for Inaccessibility Required",
             "Partially Accessible & Inaccessible settlements must have reasons_for_inaccessibility",
-            needs & no_reason, ["accessibility_status","reasons_for_inaccessibility"])
+            needs & no_reason, ["accessibility_status", "reasons_for_inaccessibility"])
 
-    # R9
+    # R8 — Habitational Status Valid
     if "habitational_status" in mlos.columns:
-        add("9","Habitational Status Valid",
+        add("8", "Habitational Status Valid",
             "habitational_status must be: Abandoned, Migrated, Inhabited, or Partially Inhabited",
             ~mlos["habitational_status"].astype(str).str.strip().isin(VALID_HAB),
             ["habitational_status"])
 
-    # R10 — set_target must not exceed set_population
+    # R9 — set_target must not exceed set_population
     if "set_target" in mlos.columns and "set_population" in mlos.columns:
         mask = (pd.to_numeric(mlos["set_target"], errors="coerce") >
                 pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
-        add("10", "set_target ≤ set_population",
+        add("9", "set_target ≤ set_population",
             "set_target must not exceed set_population",
             mask, ["set_target", "set_population"])
 
-    # R11 — number_of_household must not exceed set_population
+    # R10 — number_of_household must not exceed set_population
     if "number_of_household" in mlos.columns and "set_population" in mlos.columns:
         mask = (pd.to_numeric(mlos["number_of_household"], errors="coerce") >
                 pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
-        add("11", "number_of_household ≤ set_population",
+        add("10", "number_of_household ≤ set_population",
             "number_of_household must not exceed set_population",
             mask, ["number_of_household", "set_population"])
 
-    # R13
-    for col in ["urban","rural","scattered"]:
+    # R11 — Urban / Rural / Scattered must be Y or N
+    for col in ["urban", "rural", "scattered"]:
         if col in mlos.columns:
-            add("13",f"{col} is Y or N",
+            add("11", f"{col} is Y or N",
                 f"{col} must be Y or N and must not be null",
                 ~mlos[col].astype(str).str.strip().isin(VALID_YN), [col])
 
     if "urban" in mlos.columns and "rural" in mlos.columns:
-        mask = ((mlos["urban"].astype(str).str.strip()=="Y") &
-                (mlos["rural"].astype(str).str.strip()=="Y"))
-        add("13a","Cannot be both Urban and Rural",
-            "A settlement cannot be both urban=Y and rural=Y", mask, ["urban","rural"])
+        mask = ((mlos["urban"].astype(str).str.strip() == "Y") &
+                (mlos["rural"].astype(str).str.strip() == "Y"))
+        add("11a", "Cannot be both Urban and Rural",
+            "A settlement cannot be both urban=Y and rural=Y", mask, ["urban", "rural"])
 
     if "urban" in mlos.columns and "scattered" in mlos.columns:
-        mask = ((mlos["urban"].astype(str).str.strip()=="Y") &
-                (mlos["scattered"].astype(str).str.strip()=="Y"))
-        add("13b","Urban cannot be Scattered",
-            "Urban settlements cannot be categorised as scattered", mask, ["urban","scattered"])
+        mask = ((mlos["urban"].astype(str).str.strip() == "Y") &
+                (mlos["scattered"].astype(str).str.strip() == "Y"))
+        add("11b", "Urban cannot be Scattered",
+            "Urban settlements cannot be categorised as scattered", mask, ["urban", "scattered"])
 
-    # R14
+    # R12 — Profile Flags must be Y / N / NA
     for col in YN_NA_COLS:
         if col in mlos.columns:
-            add("14",f"{col} = Y/N/NA",
+            add("12", f"{col} = Y/N/NA",
                 f"{col} must be Y, N, or NA",
                 ~mlos[col].astype(str).str.strip().isin(VALID_YN_NA), [col])
 
-    # R16
+    # R13 — Editor must follow firstname.surname format
     if "editor" in mlos.columns:
-        add("16","Editor Format (firstname.surname)",
+        add("13", "Editor Format (firstname.surname)",
             "editor must be in format: firstname.surname (all lowercase)",
             ~vec_is_editor(mlos["editor"]), ["editor"])
 
-    # R17
+    # R14 — eha_guid must be a valid UUID
     if "eha_guid" in mlos.columns:
-        add("17","eha_guid is UUID",
+        add("14", "eha_guid is UUID",
             "eha_guid must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
             ~vec_is_uuid(mlos["eha_guid"]), ["eha_guid"])
 
@@ -1224,20 +1227,20 @@ with st.sidebar:
         st.markdown("""
 | Rule | Check |
 |------|-------|
-| 5 | Required NOT NULL fields must not be null (`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `set_population`, `set_target`, `number_of_household`, `timestamp`, `settlementarea_globalid`) |
+| 1 | All schema NOT NULL fields must not be null (`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `latitude`, `longitude`, `security_compromised`, `accessibility_status`, `set_population`, `set_target`, `number_of_household`, `urban`, `rural`, `scattered`, `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani`, `timestamp`, `eha_guid`, `settlementarea_globalid`) |
 | 2 | takeoffpoint == takeoffpoint.name |
 | 3 | takeoffpoint_code == takeoffpoint.code |
 | 4 | ward_code == takeoffpoint.wardcode |
-| 6 | security_compromised = Y/N |
-| 7 | accessibility_status valid |
-| 8 | Partial/Inaccessible requires reason |
-| 9 | habitational_status valid |
-| 10 | set_target ≤ set_population |
-| 11 | number_of_household ≤ set_population |
-| 13 | urban/rural/scattered = Y/N (no conflict) |
-| 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, nomadic, riverine, fulani) |
-| 16 | editor = firstname.surname (lowercase) |
-| 17 | eha_guid = valid UUID |
+| 5 | security_compromised = Y/N |
+| 6 | accessibility_status valid |
+| 7 | Partial/Inaccessible requires reason |
+| 8 | habitational_status valid |
+| 9 | set_target ≤ set_population |
+| 10 | number_of_household ≤ set_population |
+| 11 | urban/rural/scattered = Y/N (no conflict) |
+| 12 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, nomadic, riverine, fulani) |
+| 13 | editor = firstname.surname (lowercase) |
+| 14 | eha_guid = valid UUID |
         """)
     with st.expander("📐 Settlement QC Rules", expanded=False):
         st.markdown("""

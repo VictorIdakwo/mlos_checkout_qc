@@ -159,26 +159,24 @@ Data integrity rules applied to the MLoS table.
 
 | Rule | Check | Description |
 |------|-------|-------------|
-| 5 | Required Fields — Not Null | Schema `NOT NULL` fields must not be empty: `state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `set_population`, `set_target`, `number_of_household`, `timestamp`, `settlementarea_globalid`. Detail row includes a **Null Fields** column listing which column(s) are null for each failing row. |
+| 1 | Required Fields — Not Null | All 28 schema `NOT NULL` columns must not be empty. The detail table includes a **Null Fields** column listing exactly which column(s) are null for each failing row. Covered fields: `state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `settlement_name`, `latitude`, `longitude`, `security_compromised`, `accessibility_status`, `set_population`, `set_target`, `number_of_household`, `urban`, `rural`, `scattered`, `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani`, `timestamp`, `eha_guid`, `settlementarea_globalid` |
 | 2 | Takeoffpoint Name Match | `takeoffpoint` must match `name` in the Takeoffpoint table |
 | 3 | Takeoffpoint Code Match | `takeoffpoint_code` must match `code` in the Takeoffpoint table |
 | 4 | Ward Code Match | `ward_code` must match `wardcode` in the Takeoffpoint table |
-| 6 | Security Compromised Y/N | `security_compromised` must be `Y` or `N` |
-| 7 | Accessibility Status Valid | Must be: `Fully Accessible`, `Partially Accessible`, or `Inaccessible` |
-| 8 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
-| 9 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
-| 10 | set_target ≤ set_population | `set_target` must not exceed `set_population` |
-| 11 | number_of_household ≤ set_population | `number_of_household` must not exceed `set_population` |
-| 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
-| 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
-| 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
-| 17 | eha_guid is UUID | `eha_guid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
+| 5 | Security Compromised Y/N | `security_compromised` must be `Y` or `N` |
+| 6 | Accessibility Status Valid | Must be: `Fully Accessible`, `Partially Accessible`, or `Inaccessible` |
+| 7 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
+| 8 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
+| 9 | set_target ≤ set_population | `set_target` must not exceed `set_population` |
+| 10 | number_of_household ≤ set_population | `number_of_household` must not exceed `set_population` |
+| 11 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural (11a), or Urban and Scattered (11b) |
+| 12 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
+| 13 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
+| 14 | eha_guid is UUID | `eha_guid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-**Nullable fields** (not subject to null checks — schema allows NULL): `primarysettlement_name`, `alternate_name`, `reasons_for_inaccessibility`, `habitational_status`, `noncompliant_household`, `team_code`, `day_of_activity`, `source`, `last_updated`, `editor`, `validation_status`, `master_id`, `mlos_id`.
+**Nullable fields** (schema allows NULL — not subject to Rule 1): `primarysettlement_name`, `alternate_name`, `reasons_for_inaccessibility`, `habitational_status`, `noncompliant_household`, `team_code`, `day_of_activity`, `source`, `last_updated`, `editor`, `validation_status`, `master_id`, `mlos_id`.
 
-**NOT NULL fields covered by their value-check rules** (null causes rule to fail): `security_compromised` → R6, `accessibility_status` → R7, `urban`/`rural`/`scattered` → R13, profile flags → R14, `eha_guid` → R17, `latitude`/`longitude` → SQ2.
-
-> Rules 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
+> Rules renumbered sequentially 1–14. Previously removed rules: Day of Activity (was R12), team_code numeric (was R14t) — `team_code` is varchar; Source = MLoS (was R15) — handled by Auto Correct (`source` NULL → `IE`).
 
 ---
 
