@@ -97,7 +97,7 @@ UUID_RE     = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-f
 EDITOR_RE   = re.compile(r'^[a-z]+\.[a-z]+$')
 NULLABLE    = {"primarysettlement_name","alternate_name","reasons_for_inaccessibility"}
 YN_NA_COLS  = {"highrisk","slums","densely_populated","hard2reach","border",
-               "normadic","riverine","fulani","team_code"}
+               "normadic","riverine","fulani"}
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────────
 def load_sqlite(uploaded_file):
@@ -432,6 +432,33 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
             ["ward_code"])
 
+    # B3 — state_name in MLoS must match the state_name the boundary reference
+    # assigns to the same ward_code (catches ward codes registered to a different state)
+    if (not ref_df.empty
+            and "ward_code" in ref_df.columns
+            and "state_name" in ref_df.columns
+            and "state_name" in mlos.columns
+            and "ward_code" in mlos.columns):
+        ref_sn_map = (
+            ref_df[["ward_code", "state_name"]]
+            .drop_duplicates("ward_code")
+            .rename(columns={"state_name": "_ref_state_name"})
+        )
+        chk_sn = pd.DataFrame({
+            "ward_code":  mlos["ward_code"].astype(str).str.strip().values,
+            "_mlos_sn":   mlos["state_name"].astype(str).str.strip().str.lower().values,
+        }, index=mlos.index)
+        merged_sn = chk_sn.merge(ref_sn_map, on="ward_code", how="left")
+        merged_sn.index = mlos.index
+        merged_sn["_ref_sn_lower"] = merged_sn["_ref_state_name"].astype(str).str.strip().str.lower()
+        # Only flag rows where the ward_code IS found in the reference but the state_name differs
+        ward_found  = merged_sn["_ref_state_name"].notna()
+        sn_mismatch = merged_sn["_mlos_sn"] != merged_sn["_ref_sn_lower"]
+        mask_b3 = ward_found & sn_mismatch
+        add("B3", "State Name — Boundary Reference Match",
+            "state_name in MLoS must match the state_name assigned to the ward_code in the boundary reference",
+            mask_b3, ["ward_code", "state_name"])
+
     # B2 — lat/lon must fall within the state-filtered bounding box
     if (not filtered_bbox.empty and "ward_code" in filtered_bbox.columns
             and "latitude" in mlos.columns and "longitude" in mlos.columns):
@@ -731,13 +758,6 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             "number_of_houses must not exceed set_population",
             mask, ["number_of_houses", "set_population"])
 
-    # R12
-    if "day_of_activity" in mlos.columns:
-        add("12","Day of Activity Valid",
-            "day_of_activity must be one of: 1, 1_2, 1_2_3, 1_2_3_4, 2, 2_3, 2_3_4, 3, 3_4, 4, NA",
-            ~mlos["day_of_activity"].astype(str).str.strip().isin(VALID_DAY),
-            ["day_of_activity"])
-
     # R13
     for col in ["urban","rural","scattered"]:
         if col in mlos.columns:
@@ -763,6 +783,17 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             add("14",f"{col} = Y/N/NA",
                 f"{col} must be Y, N, or NA",
                 ~mlos[col].astype(str).str.strip().isin(VALID_YN_NA), [col])
+
+    # R14t — team_code must be numeric
+    if "team_code" in mlos.columns:
+        numeric_mask = pd.to_numeric(
+            mlos["team_code"].astype(str).str.strip(), errors="coerce"
+        ).isna() & mlos["team_code"].notna() & (
+            mlos["team_code"].astype(str).str.strip() != ""
+        )
+        add("14t", "team_code is numeric",
+            "team_code must be a numeric value",
+            numeric_mask, ["team_code"])
 
     # R16
     if "editor" in mlos.columns:
@@ -1019,9 +1050,9 @@ with st.sidebar:
 | 9 | habitational_status valid |
 | 10 | set_target ≤ set_population |
 | 11 | number_of_houses ≤ set_population |
-| 12 | day_of_activity valid code |
 | 13 | urban/rural/scattered = Y/N (no conflict) |
-| 14 | Profile flags = Y/N/NA |
+| 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, normadic, riverine, fulani) |
+| 14t | team_code must be numeric |
 | 16 | editor = firstname.surname (lowercase) |
 | 17 | globalid = valid UUID |
         """)

@@ -11,9 +11,9 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 - **Step-by-step progress bar** displayed during QC run
 - **4 QC Layers** run automatically on upload:
   - 🔎 **Schema Alignment** — verifies all required columns are present
-  - 🏘️ **MLoS Rules** — 15+ data integrity and cross-table checks
+  - 🏘️ **MLoS Rules** — data integrity and cross-table checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
-  - 🗺️ **Boundary Checks** — ward code and coordinate validation against 9,410-ward admin boundary reference, filtered by `state_name`
+  - 🗺️ **Boundary Checks** — ward code, state name, and coordinate validation against 9,410-ward admin boundary reference
 - **Pass Rate % and Fail Rate %** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
 - **MLoS Issues — Longitudinal View** — one row per settlement, Yes/No per rule column, downloadable
@@ -59,7 +59,7 @@ Once uploaded, the app:
 1. Runs **Auto Correct** on the MLoS data (pre-step before QC)
 2. Runs all 4 QC layers on the corrected data in sequence
 
-A **labelled progress bar** tracks each QC step:
+A **labelled progress bar** tracks each step:
 
 | Step | Progress | Layer |
 |------|----------|-------|
@@ -73,9 +73,7 @@ A **labelled progress bar** tracks each QC step:
 
 ### 2. Auto Correct (Pre-step)
 
-Auto Correct runs automatically **before** every QC. The corrected MLoS data is then used for all 4 QC layers.
-
-Five corrections are applied:
+Auto Correct runs automatically **before** every QC. The corrected MLoS data is used for all 4 QC layers.
 
 | # | Field(s) | Correction |
 |---|----------|------------|
@@ -85,61 +83,72 @@ Five corrections are applied:
 | 4 | `source` | NULL or empty → `IE` |
 | 5 | `globalid` | All `{` `}` stripped; any still-invalid UUID replaced with a fresh generated UUID |
 
-The **🔧 Auto Correct tab** shows:
-- A correction log (column, correction applied, rows fixed)
-- A green "No corrections needed" message if data is already clean
-- **⬇️ Download Full MLoS — Auto Corrected (Excel)** button — always visible, exports `{filename}_autocorrected.xlsx`
+The **🔧 Auto Correct tab** shows the correction log and a **⬇️ Download Full MLoS — Auto Corrected (Excel)** button (always visible).
 
 ---
 
 ### 3. Schema Alignment (Rules S1–S2)
 
-The first QC layer checks whether the uploaded file contains all required columns. Schema failures are reported in the QC Summary without stopping the remaining checks.
+Checks whether the uploaded file contains all required columns. Schema failures are reported without stopping the remaining checks.
 
-**If columns are missing:**
-- Rule S1 or S2 shows as `❌ FAIL` in the QC Summary
-- An expandable table lists each missing column, the table it belongs to, and the rules impacted
-- A **Download Schema Error Report (.xlsx)** button appears
+#### Required MLoS Columns (41)
 
-**Required columns — MLoS table (41 columns):**
+| Column | Description | Used In |
+|--------|-------------|---------|
+| `state_code` | 2-letter state code (e.g. `NA`) | Base identifier |
+| `state_name` | Full state name (e.g. `Nasarawa`) | Base identifier, B1, B3 |
+| `lga_code` | LGA numeric code | Base identifier |
+| `lga_name` | LGA name | Base identifier |
+| `ward_name` | Ward name | Base identifier |
+| `ward_code` | Ward code | Rules 4, B1, B2, B3 |
+| `takeoffpoint` | Takeoffpoint name | Rules 2, TP2 |
+| `takeoffpoint_code` | Takeoffpoint code | Rules 3, TP3 |
+| `settlement_name` | Settlement name | Base identifier |
+| `primarysettlement_name` | Primary settlement name | Nullable |
+| `alternate_name` | Alternate settlement name | Nullable |
+| `latitude` | GPS latitude | Rule B2 |
+| `longitude` | GPS longitude | Rule B2 |
+| `security_compromised` | Y or N | Rule 6 |
+| `accessibility_status` | Fully Accessible / Partially Accessible / Inaccessible | Rules 7, 8 |
+| `reasons_for_inaccessibility` | Reason text | Rule 8, Auto Correct |
+| `habitational_status` | Abandoned / Migrated / Inhabited / Partially Inhabited | Rule 9 |
+| `set_population` | Total settlement population | Rules 10, 11 |
+| `set_target` | Target count | Rule 10 |
+| `number_of_houses` | House count | Rule 11 |
+| `noncompliant_household` | Non-compliant household count | Base field |
+| `team_code` | Team code (must be numeric) | Rule 14t |
+| `day_of_activity` | Day of activity | Base field |
+| `urban` | Y or N | Rule 13 |
+| `rural` | Y or N | Rule 13 |
+| `scattered` | Y or N | Rule 13, Auto Correct |
+| `highrisk` | Y, N, or NA | Rule 14 |
+| `slums` | Y, N, or NA | Rule 14 |
+| `densely_populated` | Y, N, or NA | Rule 14 |
+| `hard2reach` | Y, N, or NA | Rule 14 |
+| `border` | Y, N, or NA | Rule 14 |
+| `normadic` | Y, N, or NA | Rule 14 |
+| `riverine` | Y, N, or NA | Rule 14 |
+| `fulani` | Y, N, or NA | Rule 14 |
+| `timestamp` | Record timestamp | Metadata |
+| `last_updated` | Last update timestamp | Metadata |
+| `source` | Data source | Auto Correct (→ `IE` if empty) |
+| `editor` | Editor username | Rule 16 |
+| `globalid` | Record UUID | Rule 17, Auto Correct |
+| `fc_globalid` | Feature class UUID | Base field |
+| `settlementarea_globalid` | Settlement area UUID | Base field |
 
-| Column | Used In Rule(s) |
-|--------|----------------|
-| `state_code`, `state_name` | Base identifiers, Boundary filter |
-| `lga_code`, `lga_name` | Base identifiers |
-| `ward_name`, `ward_code` | Rules 4, B1, B2 |
-| `takeoffpoint` | Rules 2, TP2 |
-| `takeoffpoint_code` | Rules 3, TP3 |
-| `settlement_name` | Base identifier |
-| `primarysettlement_name`, `alternate_name` | Nullable fields |
-| `latitude`, `longitude` | Rule B2 |
-| `security_compromised` | Rule 6 |
-| `accessibility_status` | Rules 7, 8 |
-| `reasons_for_inaccessibility` | Rule 8 |
-| `habitational_status` | Rule 9 |
-| `set_population`, `set_target`, `number_of_houses` | Rules 10, 11 |
-| `noncompliant_household` | Rule 10 |
-| `team_code` | Rule 14 |
-| `day_of_activity` | Rule 12 |
-| `urban`, `rural`, `scattered` | Rule 13 |
-| `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | Rule 14 |
-| `timestamp`, `last_updated` | Metadata |
-| `source` | Auto Correct |
-| `editor` | Rule 16 |
-| `globalid`, `fc_globalid`, `settlementarea_globalid` | Rule 17 |
+#### Required Takeoffpoint Columns (4)
 
-**Required columns — Takeoffpoint table (4 columns):**
-
-| Column | Used In Rule(s) |
-|--------|----------------|
-| `name` | Rule TP2 |
-| `code` | Rule TP3 |
-| `wardcode` | Rule TP4 |
-| `globalid` | Rule TP5 |
+| Column | Description | Used In |
+|--------|-------------|---------|
+| `name` | Takeoffpoint name | Rule TP2 |
+| `code` | Takeoffpoint code | Rule TP3 |
+| `wardcode` | Ward code | Rule TP4 |
+| `globalid` | Record UUID | Rule TP5 |
 
 ---
 
-### 4. MLoS QC Checks (Rules 2–17)
+### 4. MLoS QC Checks
 
 Data integrity rules applied to the MLoS table.
 
@@ -155,13 +164,13 @@ Data integrity rules applied to the MLoS table.
 | 9 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
 | 10 | set_target ≤ set_population | `set_target` must not exceed `set_population` |
 | 11 | number_of_houses ≤ set_population | `number_of_houses` must not exceed `set_population` |
-| 12 | Day of Activity Valid | Must be one of: `1`, `1_2`, `1_2_3`, `1_2_3_4`, `2`, `2_3`, `2_3_4`, `3`, `3_4`, `4`, `NA` |
 | 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
-| 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani`, `team_code` must be `Y`, `N`, or `NA` |
+| 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
+| 14t | team_code is Numeric | `team_code` must be a numeric value |
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-> Rule 15 (Source = MLoS) has been removed. `source` is now handled by Auto Correct (NULL/empty → `IE`).
+> Rules 12 (Day of Activity) and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
 
 ---
 
@@ -180,7 +189,7 @@ Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
 ---
 
-### 6. Boundary Checks (Rules B1–B2)
+### 6. Boundary Checks (Rules B1–B3)
 
 Spatial and reference validation against the admin ward boundary dataset (9,410 wards).
 
@@ -188,12 +197,13 @@ Spatial and reference validation against the admin ward boundary dataset (9,410 
 |------|-------|-------------|
 | B1 | Ward Code — Boundary Reference | `ward_code` must exist in the boundary reference for the file's state(s) |
 | B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
+| B3 | State Name — Boundary Reference Match | `state_name` in MLoS must match the `state_name` the boundary reference assigns to the same `ward_code` |
 
-**State filtering:** The boundary reference is pre-filtered by `state_name` (e.g. "Nasarawa", "Kano") matching the uploaded file's `state_name` column. Both sides are normalised to lowercase before comparing. This reduces the search space to only the wards in the relevant state(s) and avoids false positives.
+**State filtering:** The boundary reference is pre-filtered by `state_name` (e.g. "Nasarawa", "Kano") matched case-insensitively against the uploaded file's `state_name` column. Fallback to the full 9,410-ward reference if no match is found.
 
-> `state_code` is intentionally not used for filtering — the 2-letter code `"NA"` (Nasarawa) is silently converted to `NaN` by pandas when reading from SQLite, causing valid ward codes to be incorrectly flagged.
+> `state_code` is not used for filtering — the 2-letter code `"NA"` (Nasarawa) is silently converted to `NaN` by pandas when reading from SQLite, making the filter unreliable.
 
-**Boundary Issues tab** — the combined download includes reference columns for direct comparison:
+**Boundary Issues tab** includes reference comparison columns:
 
 | Extra Column | Meaning |
 |-------------|---------|
