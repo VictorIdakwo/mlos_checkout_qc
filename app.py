@@ -199,8 +199,15 @@ def get_uploaded_data(uploaded_file, progress=None):
 
 
 def pct(v, t): return f"{v/t*100:.1f}%" if t else "0%"
-def is_uuid(x): return bool(UUID_RE.match(str(x).strip())) if x and str(x) != "nan" else False
-def is_editor(x): return bool(EDITOR_RE.match(str(x).strip())) if x and str(x) != "nan" else False
+
+# Vectorized regex checks — avoid per-row Python function calls
+def vec_is_uuid(series: "pd.Series") -> "pd.Series":
+    s = series.astype(str).str.strip()
+    return s.str.match(UUID_RE.pattern, na=False)
+
+def vec_is_editor(series: "pd.Series") -> "pd.Series":
+    s = series.astype(str).str.strip()
+    return s.str.match(EDITOR_RE.pattern, na=False)
 
 # ─── Schema QC ───────────────────────────────────────────────────────────────────
 MLOS_REQUIRED_COLS = {
@@ -281,6 +288,75 @@ def build_schema_report_xlsx(schema_detail: pd.DataFrame) -> bytes:
             ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(length, 60)
     return out.getvalue()
 
+# ─── Longitudinal MLoS Report ────────────────────────────────────────────────────
+def make_longitudinal_df(mlos_df: pd.DataFrame,
+                          mlos_checks: list,
+                          mlos_detail: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a wide/longitudinal DataFrame where:
+    - Each row is a unique settlement (appears once only)
+    - Each QC rule adds a boolean column: True = error, False = no error
+    - Only rows with at least one True are returned
+    """
+    result = mlos_df.copy()
+    result["_orig_idx"] = mlos_df.index
+
+    rule_cols = []
+    for check in mlos_checks:
+        rn       = check["Rule#"]
+        col_name = f"Rule_{rn} | {check['QC Check']}"
+        rule_cols.append(col_name)
+        if "FAIL" in check["Status"] and not mlos_detail.empty:
+            failing_idx = set(mlos_detail.loc[mlos_detail["Rule#"] == rn].index)
+            result[col_name] = result["_orig_idx"].isin(failing_idx)
+        else:
+            result[col_name] = False
+
+    result = result.drop(columns=["_orig_idx"])
+    error_mask = result[rule_cols].any(axis=1)
+    return result[error_mask].reset_index(drop=True)
+
+
+def build_longitudinal_mlos(mlos_df: pd.DataFrame,
+                             mlos_checks: list,
+                             mlos_detail: pd.DataFrame) -> bytes:
+    """Write the longitudinal DataFrame to a styled Excel file and return bytes."""
+    error_df = make_longitudinal_df(mlos_df, mlos_checks, mlos_detail)
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        error_df.to_excel(writer, index=False, sheet_name="MLoS Issues — Longitudinal")
+        ws          = writer.sheets["MLoS Issues — Longitudinal"]
+        hdr_fill    = PatternFill("solid", fgColor="1D4ED8")
+        err_fill    = PatternFill("solid", fgColor="FEE2E2")
+        ok_fill     = PatternFill("solid", fgColor="F0FDF4")
+        hdr_font    = Font(bold=True, color="FFFFFF")
+        body_font   = Font(size=10)
+        center      = Alignment(horizontal="center")
+
+        rule_col_indices = {
+            i + 1 for i, h in enumerate(error_df.columns)
+            if str(h).startswith("Rule_")
+        }
+
+        for ci, cell in enumerate(ws[1], 1):
+            cell.fill = hdr_fill; cell.font = hdr_font; cell.alignment = center
+
+        for ri in range(2, len(error_df) + 2):
+            for ci in range(1, len(error_df.columns) + 1):
+                cell = ws.cell(row=ri, column=ci)
+                cell.font = body_font
+                if ci in rule_col_indices:
+                    cell.alignment = center
+                    cell.fill = err_fill if cell.value else ok_fill
+
+        for ci, col_name in enumerate(error_df.columns, 1):
+            ws.column_dimensions[get_column_letter(ci)].width = (
+                36 if str(col_name).startswith("Rule_") else 18
+            )
+
+    return out.getvalue()
+
 # ─── Boundary Reference Loading ──────────────────────────────────────────────────
 BOUNDARY_REF_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ward_boundary_ref.csv")
 BOUNDARY_BBOX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ward_boundary_bbox.csv")
@@ -318,37 +394,60 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # B1 — ward_code must exist in boundary reference
-    if not ref_df.empty and "ward_code" in ref_df.columns:
-        valid_wards = set(ref_df["ward_code"].dropna().str.strip())
+    # ── Pre-filter boundary reference to only the state_codes and lga_codes
+    # present in the uploaded file — shrinks the search space significantly
+    filtered_ref  = ref_df.copy()  if not ref_df.empty  else ref_df
+    filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
+
+    if not ref_df.empty:
+        if "state_code" in mlos.columns and "state_code" in ref_df.columns:
+            mlos_states = set(mlos["state_code"].dropna().astype(str).str.strip())
+            filtered_ref  = filtered_ref[filtered_ref["state_code"].astype(str).str.strip().isin(mlos_states)]
+            filtered_bbox = filtered_bbox[
+                filtered_bbox["ward_code"].isin(set(filtered_ref["ward_code"].dropna()))
+            ] if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns else filtered_bbox
+
+        if "lga_code" in mlos.columns and "lga_code" in ref_df.columns:
+            mlos_lgas = set(mlos["lga_code"].dropna().astype(str).str.strip())
+            filtered_ref  = filtered_ref[filtered_ref["lga_code"].astype(str).str.strip().isin(mlos_lgas)]
+            filtered_bbox = filtered_bbox[
+                filtered_bbox["ward_code"].isin(set(filtered_ref["ward_code"].dropna()))
+            ] if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns else filtered_bbox
+
+    # B1 — ward_code must exist in the (pre-filtered) boundary reference
+    if not filtered_ref.empty and "ward_code" in filtered_ref.columns:
+        valid_wards = set(filtered_ref["ward_code"].dropna().str.strip())
         add("B1", "Ward Code — Boundary Reference",
-            "ward_code must exist in the admin ward boundary reference dataset",
+            "ward_code must exist in the admin ward boundary reference for the file's state(s) and LGA(s)",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
             ["ward_code"])
 
     # B2 — lat/lon must fall within the bounding box of the declared ward_code
-    if (not bbox_df.empty and "ward_code" in bbox_df.columns
+    if (not filtered_bbox.empty and "ward_code" in filtered_bbox.columns
             and "latitude" in mlos.columns and "longitude" in mlos.columns):
-        bbox_lookup = bbox_df.set_index("ward_code")
-        lat  = pd.to_numeric(mlos["latitude"],  errors="coerce")
-        lon  = pd.to_numeric(mlos["longitude"], errors="coerce")
-        wc   = mlos["ward_code"].astype(str).str.strip()
+        # Vectorised merge against the pre-filtered bounding boxes only
+        chk = pd.DataFrame({
+            "ward_code": mlos["ward_code"].astype(str).str.strip().values,
+            "lat":       pd.to_numeric(mlos["latitude"],  errors="coerce").values,
+            "lon":       pd.to_numeric(mlos["longitude"], errors="coerce").values,
+        }, index=mlos.index)
 
-        def outside_bbox(row_idx):
-            code = wc.iloc[row_idx]
-            if code not in bbox_lookup.index:
-                return False          # ward_code not in reference — caught by B1
-            bb = bbox_lookup.loc[code]
-            pt_lat, pt_lon = lat.iloc[row_idx], lon.iloc[row_idx]
-            if pd.isna(pt_lat) or pd.isna(pt_lon):
-                return False          # null coords — caught by schema / R5
-            return not (bb["min_lon"] <= pt_lon <= bb["max_lon"]
-                        and bb["min_lat"] <= pt_lat <= bb["max_lat"])
+        bbox_ref = filtered_bbox[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
+        for col in ["min_lon","min_lat","max_lon","max_lat"]:
+            bbox_ref[col] = pd.to_numeric(bbox_ref[col], errors="coerce")
 
-        mask_b2 = pd.Series(
-            [outside_bbox(i) for i in range(len(mlos))],
-            index=mlos.index
+        merged = chk.merge(bbox_ref, on="ward_code", how="left")
+        merged.index = mlos.index
+
+        has_coords   = merged["lat"].notna() & merged["lon"].notna()
+        in_reference = merged["min_lon"].notna()
+        out_of_box   = (
+            (merged["lon"] < merged["min_lon"]) |
+            (merged["lon"] > merged["max_lon"]) |
+            (merged["lat"] < merged["min_lat"]) |
+            (merged["lat"] > merged["max_lat"])
         )
+        mask_b2 = has_coords & in_reference & out_of_box
         add("B2", "Coordinates — Within Ward Boundary",
             "latitude/longitude must fall within the bounding box of the declared ward_code",
             mask_b2, ["ward_code","latitude","longitude"])
@@ -548,13 +647,13 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
     if "editor" in mlos.columns:
         add("16","Editor Format (firstname.surname)",
             "editor must be in format: firstname.surname (all lowercase)",
-            ~mlos["editor"].astype(str).str.strip().map(is_editor), ["editor"])
+            ~vec_is_editor(mlos["editor"]), ["editor"])
 
     # R17
     if "globalid" in mlos.columns:
         add("17","globalid is UUID",
             "globalid must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
-            ~mlos["globalid"].astype(str).str.strip().map(is_uuid), ["globalid"])
+            ~vec_is_uuid(mlos["globalid"]), ["globalid"])
 
     return checks, pd.concat(details, ignore_index=True) if details else pd.DataFrame()
 
@@ -601,7 +700,7 @@ def run_takeoff_qc(takeoff: pd.DataFrame, mlos: pd.DataFrame):
 
     if "globalid" in takeoff.columns:
         add("TP5","globalid is UUID","globalid must be a valid UUID",
-            ~takeoff["globalid"].astype(str).str.strip().map(is_uuid), ["globalid"])
+            ~vec_is_uuid(takeoff["globalid"]), ["globalid"])
 
     return checks, pd.concat(details, ignore_index=True) if details else pd.DataFrame()
 
@@ -612,11 +711,11 @@ def build_excel_report(filename, mlos_checks, mlos_detail, tp_checks, tp_detail,
     out = BytesIO()
     wb  = openpyxl.Workbook()
 
-    BLU   = "1D4ED8"; LBL = "EFF6FF"
+    BLU   = "1D4ED8"
     GRN   = "15803D"; LGN = "F0FDF4"
     RED   = "DC2626"; LRD = "FFF1F2"
-    GRY   = "64748B"; LGY = "F8FAFC"
-    WHT   = "FFFFFF"; BLK = "1E293B"
+    LGY   = "F8FAFC"
+    WHT   = "FFFFFF"
 
     hdr_fill  = PatternFill("solid", fgColor=BLU)
     hdr_font  = Font(bold=True, color=WHT, size=10, name="Calibri")
@@ -870,19 +969,41 @@ if st.session_state.get("qc_cache_key") == qc_cache_key:
     boundary_detail  = st.session_state["boundary_detail"]
     load_progress.progress(100)
 else:
-    with st.spinner("Running QC checks…"):
+    with st.status("Running QC checks…", expanded=True) as _qc_status:
+        st.write("🔎 Step 1 / 4 — Schema Alignment")
         load_progress.progress(5)
-        schema_checks, schema_detail       = run_schema_qc(mlos_df, takeoff_df)
+        schema_checks, schema_detail = run_schema_qc(mlos_df, takeoff_df)
+        schema_fail = sum(1 for c in schema_checks if "FAIL" in c["Status"])
+        st.write(f"   {'❌' if schema_fail else '✅'} Schema: "
+                 f"{len(schema_checks) - schema_fail}/{len(schema_checks)} checks passed")
+
+        st.write("🏘️ Step 2 / 4 — MLoS Rules")
         load_progress.progress(15)
-        mlos_checks, mlos_detail           = run_mlos_qc(mlos_df, takeoff_df)
+        mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
+        mlos_qc_fail = sum(1 for c in mlos_checks if "FAIL" in c["Status"])
+        st.write(f"   {'❌' if mlos_qc_fail else '✅'} MLoS: "
+                 f"{len(mlos_checks) - mlos_qc_fail}/{len(mlos_checks)} checks passed")
+
+        st.write("📍 Step 3 / 4 — Takeoffpoint Rules")
         load_progress.progress(60)
         if takeoff_df.empty:
             tp_checks, tp_detail = [], pd.DataFrame()
+            st.write("   ⚠️ Takeoffpoint data not available — skipped")
         else:
-            tp_checks, tp_detail           = run_takeoff_qc(takeoff_df, mlos_df)
+            tp_checks, tp_detail = run_takeoff_qc(takeoff_df, mlos_df)
+            tp_qc_fail = sum(1 for c in tp_checks if "FAIL" in c["Status"])
+            st.write(f"   {'❌' if tp_qc_fail else '✅'} Takeoffpoint: "
+                     f"{len(tp_checks) - tp_qc_fail}/{len(tp_checks)} checks passed")
+
+        st.write("🗺️ Step 4 / 4 — Boundary Checks")
         load_progress.progress(80)
-        boundary_checks, boundary_detail   = run_ward_boundary_qc(mlos_df, boundary_ref, boundary_bbox)
+        boundary_checks, boundary_detail = run_ward_boundary_qc(mlos_df, boundary_ref, boundary_bbox)
+        b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
+        st.write(f"   {'❌' if b_fail else '✅'} Boundary: "
+                 f"{len(boundary_checks) - b_fail}/{len(boundary_checks)} checks passed")
+
         load_progress.progress(100)
+        _qc_status.update(label="QC checks complete!", state="complete", expanded=False)
     st.session_state["qc_cache_key"]   = qc_cache_key
     st.session_state["schema_checks"]  = schema_checks
     st.session_state["schema_detail"]  = schema_detail
@@ -1003,21 +1124,31 @@ with tab2:
                 st.dataframe(subset, use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.markdown("**📋 All MLoS Issue Rows (combined)**")
-        st.dataframe(mlos_detail, use_container_width=True, hide_index=True, height=350)
+        st.markdown("**📋 MLoS Issue Rows — Longitudinal View**")
+        st.caption("One row per settlement. Each QC rule appears as a column: **True** = error on that row, **False** = no error.")
 
-        # per-rule Excel
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-            mlos_detail.to_excel(xw, sheet_name="All Issues", index=False)
-            for check in mlos_checks:
-                if "FAIL" not in check["Status"]: continue
-                rn  = check["Rule#"]
-                sub = mlos_detail[mlos_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
-                sub.to_excel(xw, sheet_name=f"Rule {rn}"[:31], index=False)
-        st.download_button("⬇️ Download MLoS Issues (Excel)", data=buf.getvalue(),
-                           file_name=filename.replace(".sqlite","")+"_mlos_issues.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        long_df = make_longitudinal_df(mlos_df, mlos_checks, mlos_detail)
+        if not long_df.empty:
+            # Highlight rule columns in the preview
+            rule_flag_cols = [c for c in long_df.columns if str(c).startswith("Rule_")]
+
+            def highlight_flags(val):
+                if val is True or val == "True":
+                    return "background-color:#FEE2E2; color:#991B1B; font-weight:600"
+                if val is False or val == "False":
+                    return "background-color:#F0FDF4; color:#166534"
+                return ""
+
+            styled = long_df.style.applymap(highlight_flags, subset=rule_flag_cols)
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=350)
+
+        long_xlsx = build_longitudinal_mlos(mlos_df, mlos_checks, mlos_detail)
+        st.download_button(
+            "⬇️ Download MLoS Issues — Longitudinal (Excel)",
+            data=long_xlsx,
+            file_name=filename.rsplit(".", 1)[0] + "_mlos_issues_longitudinal.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 # ── Tab 3: Takeoffpoint Issues ────────────────────────────────────────────────────
 with tab3:
