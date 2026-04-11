@@ -394,40 +394,29 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             sub.insert(1, "Rule", rule)
             details.append(sub)
 
-    # ── Pre-filter boundary reference by state_code only.
-    # lga_code is intentionally NOT used for filtering — lga_code formats can
-    # differ between the uploaded file and the reference (e.g. "001" vs "1"),
-    # which caused valid ward codes to be dropped and incorrectly flagged by B1.
-    filtered_ref  = ref_df.copy()  if not ref_df.empty  else ref_df
-    filtered_bbox = bbox_df.copy() if not bbox_df.empty else bbox_df
+    # ── Use the full boundary reference for B1 and B2.
+    # State/LGA code formats frequently differ between the uploaded file and the
+    # reference (e.g. "NI" vs "28"), so pre-filtering caused valid ward codes to
+    # be dropped and incorrectly flagged. A set lookup on 9,410 rows is instant.
 
-    if not ref_df.empty and "state_code" in mlos.columns and "state_code" in ref_df.columns:
-        mlos_states  = set(mlos["state_code"].dropna().astype(str).str.strip())
-        filtered_ref = filtered_ref[filtered_ref["state_code"].astype(str).str.strip().isin(mlos_states)]
-        if not filtered_bbox.empty and "ward_code" in filtered_bbox.columns:
-            filtered_bbox = filtered_bbox[
-                filtered_bbox["ward_code"].isin(set(filtered_ref["ward_code"].dropna()))
-            ]
-
-    # B1 — ward_code must exist in the (pre-filtered) boundary reference
-    if not filtered_ref.empty and "ward_code" in filtered_ref.columns:
-        valid_wards = set(filtered_ref["ward_code"].dropna().str.strip())
+    # B1 — ward_code must exist in the full boundary reference
+    if not ref_df.empty and "ward_code" in ref_df.columns:
+        valid_wards = set(ref_df["ward_code"].dropna().astype(str).str.strip())
         add("B1", "Ward Code — Boundary Reference",
-            "ward_code must exist in the admin ward boundary reference for the file's state(s) and LGA(s)",
+            "ward_code must exist in the admin ward boundary reference (9,410 wards)",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
             ["ward_code"])
 
     # B2 — lat/lon must fall within the bounding box of the declared ward_code
-    if (not filtered_bbox.empty and "ward_code" in filtered_bbox.columns
+    if (not bbox_df.empty and "ward_code" in bbox_df.columns
             and "latitude" in mlos.columns and "longitude" in mlos.columns):
-        # Vectorised merge against the pre-filtered bounding boxes only
         chk = pd.DataFrame({
             "ward_code": mlos["ward_code"].astype(str).str.strip().values,
             "lat":       pd.to_numeric(mlos["latitude"],  errors="coerce").values,
             "lon":       pd.to_numeric(mlos["longitude"], errors="coerce").values,
         }, index=mlos.index)
 
-        bbox_ref = filtered_bbox[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
+        bbox_ref = bbox_df[["ward_code","min_lon","min_lat","max_lon","max_lat"]].copy()
         for col in ["min_lon","min_lat","max_lon","max_lat"]:
             bbox_ref[col] = pd.to_numeric(bbox_ref[col], errors="coerce")
 
@@ -534,6 +523,20 @@ def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
             df.loc[mask, col] = "NA"
             log.append({"Column": col,
                         "Correction": "NULL → NA",
+                        "Rows Fixed": n})
+
+    # ── Correction 1b: scattered NULL or "NA" → "N" ─────────────────────────
+    if "scattered" in df.columns:
+        mask = (
+            df["scattered"].isna() |
+            df["scattered"].astype(str).str.strip().eq("") |
+            df["scattered"].astype(str).str.strip().eq("NA")
+        )
+        n = int(mask.sum())
+        if n:
+            df.loc[mask, "scattered"] = "N"
+            log.append({"Column": "scattered",
+                        "Correction": "NULL / NA → N",
                         "Rows Fixed": n})
 
     # ── Correction 2: Fully Accessible + NULL reason → "NA" ──────────────────
@@ -956,7 +959,8 @@ with st.sidebar:
         st.markdown("""
 | # | Field | Correction Applied |
 |---|-------|--------------------|
-| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani` | NULL → `NA` |
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | NULL → `NA` |
+| 1b | `scattered` | NULL or `NA` → `N` |
 | 2 | `reasons_for_inaccessibility` | NULL → `NA` where `accessibility_status = Fully Accessible` |
 | 3 | `source` | NULL / empty → `IE` |
 | 4 | `globalid` | `{` `}` stripped; invalid UUID → new generated UUID |
@@ -1237,11 +1241,12 @@ with tab1:
     st.caption(
         "The following corrections are applied automatically to the uploaded MLoS data:\n\n"
         "1. **Flag columns** (`highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, "
-        "`normadic`, `scattered`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
-        "2. **Reason for Inaccessibility** — filled with `NA` where `accessibility_status` is "
+        "`normadic`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
+        "2. **Scattered** — NULL or `NA` values filled with `N`\n"
+        "3. **Reason for Inaccessibility** — filled with `NA` where `accessibility_status` is "
         "`Fully Accessible` and the reason is NULL\n"
-        "3. **Source** — NULL or empty values replaced with `IE`\n"
-        "4. **GlobalID** — all `{` and `}` characters stripped; any still-invalid UUID is "
+        "4. **Source** — NULL or empty values replaced with `IE`\n"
+        "5. **GlobalID** — all `{` and `}` characters stripped; any still-invalid UUID is "
         "replaced with a freshly generated UUID"
     )
     st.markdown("---")
