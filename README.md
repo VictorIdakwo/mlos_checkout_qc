@@ -14,7 +14,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
   - 🏘️ **MLoS Rules** — data integrity and cross-table checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
   - 🗺️ **Boundary Checks** — ward code, state name, and coordinate validation against 9,410-ward admin boundary reference
-- **Pass Rate % and Fail Rate %** displayed on the dashboard
+- **Pass Rate %, Fail Rate %, and 🏆 Weighted QC Score** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
 - **MLoS Issues — Longitudinal View** — one row per settlement, Yes/No per rule column, downloadable
 - **Boundary Issues** — includes reference ward code, ward name, LGA, and state columns for comparison
@@ -40,7 +40,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 | Tab | Contents |
 |-----|----------|
 | 🔧 Auto Correct | Correction log + full corrected MLoS download (always available) |
-| 📊 QC Summary | Pass/fail per rule, failing row counts, Pass Rate %, Fail Rate % |
+| 📊 QC Summary | Weighted QC Score breakdown, pass/fail per rule, failing row counts, Pass Rate %, Fail Rate % |
 | 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule) |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
 | 🗺️ Boundary Issues | Ward code and coordinate failures with boundary reference comparison columns |
@@ -219,7 +219,39 @@ Reference files bundled in the repo:
 
 ---
 
-### 7. MLoS Issues — Longitudinal View
+### 7. Weighted QC Score
+
+After all 4 layers run, the app calculates a **Weighted QC Score** that reflects the relative importance of each layer:
+
+| QC Layer | Weight |
+|----------|--------|
+| 🔎 Schema Alignment | 10% |
+| 🏘️ MLoS Rules | 50% |
+| 📍 Takeoffpoint Rules | 30% |
+| 🗺️ Boundary Checks | 10% |
+
+**How it's calculated:**
+
+For each layer, the *layer pass rate* = number of passing rules ÷ total rules in that layer. The weighted contribution = layer pass rate × layer weight × 100.
+
+```
+Weighted Score = (Schema Pass Rate × 10%) + (MLoS Pass Rate × 50%)
+               + (TP Pass Rate × 30%)      + (Boundary Pass Rate × 10%)
+```
+
+> If a layer has no applicable checks (e.g. Takeoffpoint rules skipped for CSV uploads), that layer receives **full credit** (100% pass rate) so the score is not unfairly penalised.
+
+The score and a breakdown table are shown in the **📊 QC Summary** tab. The 🏆 score also appears in the top metric bar on the dashboard.
+
+| Score Range | Interpretation |
+|-------------|---------------|
+| 80% – 100% | Green — file is in good shape |
+| 60% – 79% | Amber — notable issues to review |
+| 0% – 59% | Red — significant data quality problems |
+
+---
+
+### 8. MLoS Issues — Longitudinal View
 
 The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settlement rows that failed at least one rule:
 
@@ -231,7 +263,7 @@ The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settle
 
 ---
 
-### 8. Generate & Download Report
+### 9. Generate & Download Report
 
 Go to the **Generate Report** tab to:
 
@@ -243,7 +275,7 @@ The report file is named: `{filename}_QC_Report.xlsx`
 
 ---
 
-### 9. Send QC Email
+### 10. Send QC Email
 
 Click **Send QC Email** in the Generate Report tab to notify the data team.
 
