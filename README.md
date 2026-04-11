@@ -13,7 +13,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
   - 🔎 **Schema Alignment** — verifies all required columns are present
   - 🏘️ **MLoS Rules** — data integrity and cross-table checks
   - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
-  - 🗺️ **Boundary Checks** — ward code, state name, and coordinate validation against 9,410-ward admin boundary reference
+  - 🗺️ **Boundary Checks** — null ward code detection, ward code existence, coordinate, and state name validation against 9,410-ward admin boundary reference
 - **Pass Rate %, Fail Rate %, and 🏆 Weighted QC Score** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
 - **MLoS Issues — Longitudinal View** — one row per settlement, Yes/No per rule column, downloadable
@@ -43,7 +43,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 | 📊 QC Summary | Weighted QC Score breakdown, pass/fail per rule, failing row counts, Pass Rate %, Fail Rate % |
 | 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule) |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
-| 🗺️ Boundary Issues | Ward code and coordinate failures with boundary reference comparison columns |
+| 🗺️ Boundary Issues | Null/missing ward codes (B0), unmatched ward codes (B1), out-of-boundary coordinates (B2), state name mismatches (B3), with boundary reference comparison columns |
 | 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
 | 📄 Generate Report | Full QC verdict, 7-sheet Excel report download, and Send Email button |
 
@@ -187,7 +187,7 @@ Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
 ---
 
-### 6. Boundary Checks (Rules B1–B3)
+### 6. Boundary Checks (Rules B0–B3)
 
 Spatial and reference validation against the admin ward boundary dataset (9,410 wards).
 
