@@ -1139,18 +1139,12 @@ with tab2:
 
         long_df = make_longitudinal_df(mlos_df, mlos_checks, mlos_detail)
         if not long_df.empty:
-            # Highlight rule columns in the preview
             rule_flag_cols = [c for c in long_df.columns if str(c).startswith("Rule_")]
-
-            def highlight_flags(val):
-                if val is True or val == "True":
-                    return "background-color:#FEE2E2; color:#991B1B; font-weight:600"
-                if val is False or val == "False":
-                    return "background-color:#F0FDF4; color:#166534"
-                return ""
-
-            styled = long_df.style.map(highlight_flags, subset=rule_flag_cols)
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=350)
+            # Convert booleans to emoji strings for visual clarity — avoids Styler compatibility issues
+            display_df = long_df.copy()
+            for col in rule_flag_cols:
+                display_df[col] = display_df[col].map(lambda v: "❌ Error" if v is True else ("✅ OK" if v is False else v))
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=350)
 
         long_xlsx = build_longitudinal_mlos(mlos_df, mlos_checks, mlos_detail)
         st.download_button(
