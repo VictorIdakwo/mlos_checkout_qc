@@ -1,28 +1,26 @@
 # MLOS Checkout QC
 
-A Streamlit app for running automated Quality Control (QC) checks on MLOS (Master List of Settlements) checkout files. The tool validates schema alignment, data integrity, and cross-table consistency before producing a downloadable QC report.
+A Streamlit app for running automated Quality Control (QC) checks on MLOS (Master List of Settlements) checkout files across **4 QC layers**: schema alignment, MLoS data integrity, takeoffpoint cross-checks, and admin boundary validation.
 
 ---
 
 ## Features
 
 - Upload `.sqlite`, `.csv`, `.xlsx`, or `.xls` checkout files
-- **Step 1 — Schema Validation:** checks that all required columns are present before running any QC
-- **Step 2 — Automated QC Checks:**
-  - **MLoS layer** (`master_list_settlement_update_view`) — 15+ rules
-  - **Takeoffpoint layer** (`mlos_takeoffpoint_view`) — 4 rules
-  - Cross-table consistency (ward codes, takeoffpoint names & codes)
+- **4 QC Layers** run automatically on upload:
+  - 🔎 **Schema Alignment** — verifies all required columns are present before running data checks
+  - 🏘️ **MLoS Rules** — 15+ data integrity and cross-table checks
+  - 📍 **Takeoffpoint Rules** — 4 cross-table consistency checks
+  - 🗺️ **Boundary Checks** — ward code and coordinate validation against admin ward boundary reference
+- **Pass Rate % and Fail Rate %** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
-- Filterable raw data view
+- Downloadable Excel reports per QC layer and per rule
 - **Generate Report tab** — full QC verdict (CLEAN / FAILING) + downloadable 7-sheet Excel report
+- **Send QC Email** — sends summary to the data team on demand
 
 ---
 
-## Process & Procedure
-
-### 1. Upload Your File
-
-Use the **sidebar uploader** to upload your MLOS checkout file. Supported formats:
+## Supported File Formats
 
 | Format | MLoS Data | Takeoffpoint Data |
 |--------|-----------|-------------------|
@@ -30,48 +28,58 @@ Use the **sidebar uploader** to upload your MLOS checkout file. Supported format
 | `.xlsx` / `.xls` | Sheet 1 (or sheet named `mlos`) | Sheet 2 (or sheet named `takeoffpoint`) |
 | `.csv` | Entire CSV file | Not available — takeoff cross-checks skipped |
 
-> **Note:** For full QC coverage including takeoffpoint cross-checks, use `.sqlite` or `.xlsx` with two sheets.
+> For full QC coverage including takeoffpoint and boundary checks, use `.sqlite` or `.xlsx`.
 
 ---
 
-### 2. Schema Validation (Automatic)
+## Process & Procedure
 
-Before any QC rule is applied, the tool checks whether the uploaded file contains all required columns.
+### 1. Upload Your File
 
-**If the schema does not align:**
-- A red error banner is shown listing how many columns are missing
-- An expandable table identifies each missing column, which table it belongs to, and the impact on QC rules
-- A **Download Schema Error Report (.xlsx)** button is provided so you can share or log the issue
-- QC execution is paused — no partial or misleading results are shown
+Use the **sidebar uploader** to upload your MLOS checkout file. The tool accepts `.sqlite`, `.db`, `.csv`, `.xlsx`, and `.xls` files.
 
-**Fix the schema issues in the source file and re-upload to proceed.**
+---
 
-**Required columns — MLoS table:**
+### 2. Schema Alignment (Rules S1–S2)
 
-| Column | Used In |
-|--------|---------|
+The first QC layer checks whether the uploaded file contains all required columns **before** running any data checks. Unlike a hard gate, schema results are reported as part of the QC summary so the process continues and shows all issues at once.
+
+**If columns are missing:**
+- Rule S1 or S2 shows as `❌ FAIL` in the QC Summary
+- An expandable table lists each missing column, which table it belongs to, and the QC rules impacted
+- A **Download Schema Error Report (.xlsx)** button appears
+
+**Required columns — MLoS table (41 columns):**
+
+| Column | Used In Rule(s) |
+|--------|----------------|
+| `state_code`, `state_name` | Base identifiers |
+| `lga_code`, `lga_name` | Base identifiers |
+| `ward_name`, `ward_code` | Rules 4, B1, B2 |
 | `takeoffpoint` | Rules 2, TP2 |
 | `takeoffpoint_code` | Rules 3, TP3 |
-| `ward_code` | Rules 4, TP4 |
 | `settlement_name` | Base identifier |
+| `primarysettlement_name`, `alternate_name` | Nullable fields |
+| `latitude`, `longitude` | Rule B2 |
 | `security_compromised` | Rule 6 |
 | `accessibility_status` | Rules 7, 8 |
 | `reasons_for_inaccessibility` | Rule 8 |
 | `habitational_status` | Rule 9 |
-| `set_target` | Rule 10 |
-| `number_of_houses` | Rule 10 |
-| `set_population` | Rule 10 |
+| `set_population`, `set_target`, `number_of_houses` | Rule 10 |
+| `noncompliant_household` | Rule 10 |
+| `team_code` | Rule 14 |
 | `day_of_activity` | Rule 12 |
 | `urban`, `rural`, `scattered` | Rule 13 |
-| `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani`, `team_code` | Rule 14 |
+| `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | Rule 14 |
+| `timestamp`, `last_updated` | Metadata |
 | `source` | Rule 15 |
 | `editor` | Rule 16 |
-| `globalid` | Rule 17 |
+| `globalid`, `fc_globalid`, `settlementarea_globalid` | Rule 17 |
 
-**Required columns — Takeoffpoint table:**
+**Required columns — Takeoffpoint table (4 columns):**
 
-| Column | Used In |
-|--------|---------|
+| Column | Used In Rule(s) |
+|--------|----------------|
 | `name` | Rule TP2 |
 | `code` | Rule TP3 |
 | `wardcode` | Rule TP4 |
@@ -79,11 +87,9 @@ Before any QC rule is applied, the tool checks whether the uploaded file contain
 
 ---
 
-### 3. QC Checks
+### 3. MLoS QC Checks (Rules 2–17)
 
-Once schema validation passes, QC checks run automatically across both tables.
-
-#### MLoS Table Rules
+Data integrity rules applied to the MLoS table.
 
 | Rule | Check | Description |
 |------|-------|-------------|
@@ -97,13 +103,17 @@ Once schema validation passes, QC checks run automatically across both tables.
 | 9 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
 | 10 | Target & Houses ≤ Population | `set_target` and `number_of_houses` must not exceed `set_population` |
 | 12 | Day of Activity Valid | Must be one of: `1`, `1_2`, `1_2_3`, `1_2_3_4`, `2`, `2_3`, `2_3_4`, `3`, `3_4`, `4`, `NA` |
-| 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; a settlement cannot be both Urban and Rural, or Urban and Scattered |
+| 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
 | 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani`, `team_code` must be `Y`, `N`, or `NA` |
 | 15 | Source = MLoS | `source` field must start with `MLoS` |
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-#### Takeoffpoint Table Rules
+---
+
+### 4. Takeoffpoint QC Checks (Rules TP2–TP5)
+
+Cross-table consistency checks between the Takeoffpoint and MLoS tables.
 
 | Rule | Check | Description |
 |------|-------|-------------|
@@ -112,32 +122,71 @@ Once schema validation passes, QC checks run automatically across both tables.
 | TP4 | Ward Code matches MLoS | `wardcode` must match `ward_code` in the MLoS table |
 | TP5 | GlobalID is UUID | `globalid` must be a valid UUID |
 
-> **Note:** If a CSV file is uploaded, Takeoffpoint data is unavailable and rules TP2–TP5 are skipped. A warning is displayed.
+> If a CSV file is uploaded, Takeoffpoint data is unavailable and rules TP2–TP5 are skipped with a warning.
 
 ---
 
-### 4. Review Results
+### 5. Boundary Checks (Rules B1–B2)
+
+Spatial and reference validation against the admin ward boundary dataset (9,410 wards).
+
+| Rule | Check | Description |
+|------|-------|-------------|
+| B1 | Ward Code — Boundary Reference | `ward_code` must exist in the admin ward boundary reference dataset |
+| B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
+
+Reference files bundled in the repo:
+- `ward_boundary_ref.csv` — 9,410 ward codes with state, LGA, and ward metadata
+- `ward_boundary_bbox.csv` — bounding box (min/max lon/lat) per ward code extracted from the admin boundary dataset
+
+---
+
+### 6. Review Results
 
 Results are displayed across tabs:
 
-- **QC Summary** — pass/fail status per rule with failing row counts and percentages
-- **MLoS Issues** — row-level drilldown for each failing MLoS rule
-- **Takeoffpoint Issues** — row-level drilldown for each failing takeoffpoint rule
-- **Raw Data** — filterable view of the full MLoS dataset
+| Tab | Contents |
+|-----|----------|
+| 📊 QC Summary | Pass/fail status per rule with failing row counts, percentages, Pass Rate %, Fail Rate % |
+| 🏘️ MLoS Issues | Row-level drilldown for each failing MLoS rule + combined download |
+| 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + combined download |
+| 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + combined download |
+| 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
+| 📄 Generate Report | Full QC verdict, downloadable 7-sheet Excel report, and Send Email button |
 
 ---
 
-### 5. Generate & Download Report
+### 7. Generate & Download Report
 
 Go to the **Generate Report** tab to:
 
 1. See the overall QC verdict: `✅ CLEAN` or `❌ FAILING`
-2. Click **Generate Report** to produce a detailed 7-sheet Excel workbook
-3. Download the report and share with the data team or programme leads
+2. Click **Generate Report** to produce a detailed Excel workbook
+3. Download and share with the data team or programme leads
 
 The report file is named: `{filename}_QC_Report.xlsx`
 
-If the schema was invalid, a separate **Schema Error Report** (`.xlsx`) can be downloaded from the schema validation step before re-uploading.
+---
+
+### 8. Send QC Email
+
+Click **Send QC Email** in the Generate Report tab to notify the data team.
+
+| Field | Value |
+|-------|-------|
+| **To** | adanna.alex@ehealthnigeria.org |
+| **CC** | fashoto.busayo@ehealthnigeria.org, victor.idakwo@ehealthnigeria.org, oluwadamilare.akindipe@ehealthnigeria.org |
+| **Subject** | MLoS QC checks for `{filename}` |
+| **Body** | Full check-by-check summary with verdict, issue counts, and missing columns |
+
+SMTP credentials must be configured in Streamlit secrets:
+
+```toml
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_user = "your@email.com"
+smtp_pass = "your-app-password"
+```
 
 ---
 
@@ -150,13 +199,12 @@ streamlit run app.py
 
 ## Streamlit Cloud
 
-This app is deployable directly to [Streamlit Cloud](https://streamlit.io/cloud).
-
 1. Fork or clone this repo
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Connect your GitHub repo
 4. Set **Main file path** to `app.py`
-5. Deploy!
+5. Add SMTP credentials under **App secrets**
+6. Deploy!
 
 ---
 

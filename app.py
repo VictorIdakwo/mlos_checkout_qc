@@ -759,10 +759,23 @@ with st.sidebar:
     st.caption("Supported: `.sqlite` · `.csv` · `.xlsx` · `.xls`")
     st.markdown("---")
     st.markdown("#### 📋 QC Rules Reference")
-    with st.expander("MLoS Table Rules", expanded=False):
+    with st.expander("🔎 Schema Alignment Rules", expanded=False):
         st.markdown("""
-| # | Rule |
-|---|------|
+| Rule | Check |
+|------|-------|
+| S1 | All 41 required MLoS columns present |
+| S2 | All 4 required Takeoffpoint columns present |
+
+**MLoS required columns:**
+`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `takeoffpoint`, `takeoffpoint_code`, `settlement_name`, `primarysettlement_name`, `alternate_name`, `latitude`, `longitude`, `security_compromised`, `accessibility_status`, `reasons_for_inaccessibility`, `habitational_status`, `set_population`, `set_target`, `number_of_houses`, `noncompliant_household`, `team_code`, `day_of_activity`, `urban`, `rural`, `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani`, `timestamp`, `source`, `last_updated`, `editor`, `globalid`, `fc_globalid`, `settlementarea_globalid`
+
+**Takeoffpoint required columns:**
+`name`, `code`, `wardcode`, `globalid`
+        """)
+    with st.expander("🏘️ MLoS Table Rules", expanded=False):
+        st.markdown("""
+| Rule | Check |
+|------|-------|
 | 2 | takeoffpoint == takeoffpoint.name |
 | 3 | takeoffpoint_code == takeoffpoint.code |
 | 4 | ward_code == takeoffpoint.wardcode |
@@ -771,25 +784,32 @@ with st.sidebar:
 | 7 | accessibility_status valid |
 | 8 | Partial/Inaccessible requires reason |
 | 9 | habitational_status valid |
-| 10 | set_target & houses ≤ population |
+| 10 | set_target & houses ≤ set_population |
 | 12 | day_of_activity valid code |
-| 13 | urban/rural/scattered = Y/N |
+| 13 | urban/rural/scattered = Y/N (no conflict) |
 | 14 | Profile flags = Y/N/NA |
-| 15 | source = MLoS |
-| 16 | editor = firstname.surname |
-| 17 | globalid = UUID |
+| 15 | source starts with MLoS |
+| 16 | editor = firstname.surname (lowercase) |
+| 17 | globalid = valid UUID |
         """)
-    with st.expander("Takeoffpoint Rules", expanded=False):
+    with st.expander("📍 Takeoffpoint Rules", expanded=False):
         st.markdown("""
-| # | Rule |
-|---|------|
+| Rule | Check |
+|------|-------|
 | TP2 | name == mlos.takeoffpoint |
 | TP3 | code == mlos.takeoffpoint_code |
 | TP4 | wardcode == mlos.ward_code |
-| TP5 | globalid = UUID |
+| TP5 | globalid = valid UUID |
+        """)
+    with st.expander("🗺️ Boundary Check Rules", expanded=False):
+        st.markdown("""
+| Rule | Check |
+|------|-------|
+| B1 | ward_code exists in admin ward boundary reference (9,410 wards) |
+| B2 | latitude/longitude falls within the bounding box of the declared ward_code |
         """)
     st.markdown("---")
-    st.caption("eHealth Africa · MLOS QC Tool · v1.0")
+    st.caption("eHealth Africa · MLOS QC Tool · v1.1")
 
 
 # ─── HEADER ───────────────────────────────────────────────────────────────────────
@@ -804,21 +824,23 @@ if not uploaded:
     st.info("👈 **Upload a file** (`.sqlite`, `.csv`, `.xlsx`, or `.xls`) using the sidebar to run QC checks.")
     with st.expander("ℹ️ About this tool", expanded=True):
         st.markdown("""
-This tool runs automated Quality Control on MLOS checkout files.
+This tool runs automated Quality Control on MLOS checkout files across **4 QC layers**.
 
 **Supported formats:**
-- **SQLite** (`.sqlite`, `.db`) — reads `master_list_settlement_update_view` and `mlos_takeoffpoint_view` directly
-- **Excel** (`.xlsx`, `.xls`) — Sheet 1 = MLoS data, Sheet 2 = Takeoffpoint data
-- **CSV** (`.csv`) — treated as MLoS data only (takeoffpoint cross-checks will be skipped)
+- **SQLite** (`.sqlite`, `.db`) — reads views directly
+- **Excel** (`.xlsx`, `.xls`) — Sheet 1 = MLoS, Sheet 2 = Takeoffpoint
+- **CSV** (`.csv`) — MLoS data only (takeoffpoint cross-checks skipped)
 
-**It checks:**
-- **MLoS layer** — 15+ rules
-- **Takeoffpoint layer** — 4 rules
-- Cross-table consistency (ward codes, takeoffpoint names & codes)
+**QC Layers:**
+- 🔎 **Schema Alignment** (S1–S2) — verifies all required columns are present
+- 🏘️ **MLoS Rules** (2–17) — 15+ data integrity checks
+- 📍 **Takeoffpoint Rules** (TP2–TP5) — 4 cross-table checks
+- 🗺️ **Boundary Checks** (B1–B2) — ward code and coordinate validation against admin boundary reference
 
-**The Generate Report tab lets you:**
-- See a full QC verdict (CLEAN or FAILING)
-- Download a detailed 7-sheet Excel report
+**Outputs:**
+- Pass Rate % and Fail Rate % on the dashboard
+- Per-rule issue drilldown with downloadable Excel reports
+- Full QC report (Excel) and email summary to the data team
         """)
     st.stop()
 
