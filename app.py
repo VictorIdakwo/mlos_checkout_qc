@@ -687,14 +687,21 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             ~mlos["habitational_status"].astype(str).str.strip().isin(VALID_HAB),
             ["habitational_status"])
 
-    # R10
-    for col in ["set_target","number_of_houses"]:
-        if col in mlos.columns and "set_population" in mlos.columns:
-            mask = (pd.to_numeric(mlos[col], errors="coerce") >
-                    pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
-            add("10",f"{col} ≤ set_population",
-                f"{col} must not be higher than set_population",
-                mask, [col,"set_population"])
+    # R10 — set_target must not exceed set_population
+    if "set_target" in mlos.columns and "set_population" in mlos.columns:
+        mask = (pd.to_numeric(mlos["set_target"], errors="coerce") >
+                pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
+        add("10", "set_target ≤ set_population",
+            "set_target must not exceed set_population",
+            mask, ["set_target", "set_population"])
+
+    # R11 — number_of_houses must not exceed set_population
+    if "number_of_houses" in mlos.columns and "set_population" in mlos.columns:
+        mask = (pd.to_numeric(mlos["number_of_houses"], errors="coerce") >
+                pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
+        add("11", "number_of_houses ≤ set_population",
+            "number_of_houses must not exceed set_population",
+            mask, ["number_of_houses", "set_population"])
 
     # R12
     if "day_of_activity" in mlos.columns:
@@ -728,11 +735,6 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             add("14",f"{col} = Y/N/NA",
                 f"{col} must be Y, N, or NA",
                 ~mlos[col].astype(str).str.strip().isin(VALID_YN_NA), [col])
-
-    # R15
-    if "source" in mlos.columns:
-        add("15","Source = MLoS","source field must start with 'MLoS'",
-            ~mlos["source"].astype(str).str.strip().str.startswith("MLoS"), ["source"])
 
     # R16
     if "editor" in mlos.columns:
@@ -986,11 +988,11 @@ with st.sidebar:
 | 7 | accessibility_status valid |
 | 8 | Partial/Inaccessible requires reason |
 | 9 | habitational_status valid |
-| 10 | set_target & houses ≤ set_population |
+| 10 | set_target ≤ set_population |
+| 11 | number_of_houses ≤ set_population |
 | 12 | day_of_activity valid code |
 | 13 | urban/rural/scattered = Y/N (no conflict) |
 | 14 | Profile flags = Y/N/NA |
-| 15 | source starts with MLoS |
 | 16 | editor = firstname.surname (lowercase) |
 | 17 | globalid = valid UUID |
         """)
@@ -1173,8 +1175,8 @@ else:
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "📊 QC Summary",
     "🔧 Auto Correct",
+    "📊 QC Summary",
     "🏘️ MLoS Issues",
     "📍 Takeoffpoint Issues",
     "🗺️ Boundary Issues",
@@ -1182,8 +1184,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📄 Generate Report",
 ])
 
-# ── Tab 1: QC Summary ─────────────────────────────────────────────────────────────
-with tab1:
+# ── Tab 2: QC Summary ─────────────────────────────────────────────────────────────
+with tab2:
     def colour_rows(row):
         if "FAIL" in str(row.get("Status","")):
             return ["background-color:#fff1f2; color:#be123c"] * len(row)
@@ -1229,8 +1231,8 @@ with tab1:
         df_b = pd.DataFrame(boundary_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
         st.dataframe(df_b.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
 
-# ── Tab 2: Auto Correct ───────────────────────────────────────────────────────────
-with tab2:
+# ── Tab 1: Auto Correct ───────────────────────────────────────────────────────────
+with tab1:
     st.markdown('<div class="sec-title">🔧 Auto Correct — MLoS Data Fixes</div>', unsafe_allow_html=True)
     st.caption(
         "The following corrections are applied automatically to the uploaded MLoS data:\n\n"

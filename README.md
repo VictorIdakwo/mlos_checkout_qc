@@ -39,8 +39,8 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 
 | Tab | Contents |
 |-----|----------|
-| 📊 QC Summary | Pass/fail status per rule, failing row counts, Pass Rate %, Fail Rate % |
 | 🔧 Auto Correct | Automated data fixes with correction log + corrected file download |
+| 📊 QC Summary | Pass/fail status per rule, failing row counts, Pass Rate %, Fail Rate % |
 | 🏘️ MLoS Issues | Row-level drilldown per failing rule + Longitudinal View (Yes/No per rule column) |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + download |
 | 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + download |
@@ -146,11 +146,11 @@ Data integrity rules applied to the MLoS table.
 | 7 | Accessibility Status Valid | Must be: `Fully Accessible`, `Partially Accessible`, or `Inaccessible` |
 | 8 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
 | 9 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
-| 10 | Target & Houses ≤ Population | `set_target` and `number_of_houses` must not exceed `set_population` |
+| 10 | set_target ≤ set_population | `set_target` must not exceed `set_population` |
+| 11 | number_of_houses ≤ set_population | `number_of_houses` must not exceed `set_population` |
 | 12 | Day of Activity Valid | Must be one of: `1`, `1_2`, `1_2_3`, `1_2_3_4`, `2`, `2_3`, `2_3_4`, `3`, `3_4`, `4`, `NA` |
 | 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
 | 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani`, `team_code` must be `Y`, `N`, or `NA` |
-| 15 | Source = MLoS | `source` field must start with `MLoS` |
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
