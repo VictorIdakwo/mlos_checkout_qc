@@ -7,6 +7,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 ## Features
 
 - Upload `.sqlite`, `.csv`, `.xlsx`, or `.xls` checkout files
+- **Step-by-step progress bar** displayed during QC run
 - **4 QC Layers** run automatically on upload:
   - 🔎 **Schema Alignment** — verifies all required columns are present before running data checks
   - 🏘️ **MLoS Rules** — 15+ data integrity and cross-table checks
@@ -15,6 +16,7 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 - **Pass Rate % and Fail Rate %** displayed on the dashboard
 - Per-rule issue drilldown with expandable row-level detail tables
 - Downloadable Excel reports per QC layer and per rule
+- **MLoS Issues — Longitudinal View** — one row per settlement, True/False per rule column, colour-coded and downloadable
 - **Generate Report tab** — full QC verdict (CLEAN / FAILING) + downloadable 7-sheet Excel report
 - **Send QC Email** — sends summary to the data team on demand
 
@@ -37,6 +39,15 @@ A Streamlit app for running automated Quality Control (QC) checks on MLOS (Maste
 ### 1. Upload Your File
 
 Use the **sidebar uploader** to upload your MLOS checkout file. The tool accepts `.sqlite`, `.db`, `.csv`, `.xlsx`, and `.xls` files.
+
+Once uploaded, the app immediately begins all 4 QC layers in sequence. A **labelled progress bar** tracks each step:
+
+| Step | Progress | Layer |
+|------|----------|-------|
+| Step 1 / 4 | 5% → 25% | 🔎 Schema Alignment |
+| Step 2 / 4 | 26% → 50% | 🏘️ MLoS Rules |
+| Step 3 / 4 | 51% → 75% | 📍 Takeoffpoint Rules |
+| Step 4 / 4 | 76% → 100% | 🗺️ Boundary Checks |
 
 ---
 
@@ -135,6 +146,8 @@ Spatial and reference validation against the admin ward boundary dataset (9,410 
 | B1 | Ward Code — Boundary Reference | `ward_code` must exist in the admin ward boundary reference dataset |
 | B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
 
+**Performance optimisation:** The boundary search is pre-filtered by `state_code` and `lga_code` from the uploaded file, so only the relevant subset of the 9,410-ward reference is searched. This significantly reduces lookup time for single-state or single-LGA files.
+
 Reference files bundled in the repo:
 - `ward_boundary_ref.csv` — 9,410 ward codes with state, LGA, and ward metadata
 - `ward_boundary_bbox.csv` — bounding box (min/max lon/lat) per ward code extracted from the admin boundary dataset
@@ -148,7 +161,7 @@ Results are displayed across tabs:
 | Tab | Contents |
 |-----|----------|
 | 📊 QC Summary | Pass/fail status per rule with failing row counts, percentages, Pass Rate %, Fail Rate % |
-| 🏘️ MLoS Issues | Row-level drilldown for each failing MLoS rule + combined download |
+| 🏘️ MLoS Issues | Row-level drilldown per failing rule + **Longitudinal View** (one row per settlement, True/False per rule column) + combined download |
 | 📍 Takeoffpoint Issues | Row-level drilldown for each failing takeoffpoint rule + combined download |
 | 🗺️ Boundary Issues | Row-level drilldown for ward code and coordinate failures + combined download |
 | 🔍 Raw Data | Filterable view of the full MLoS and Takeoffpoint datasets |
@@ -156,7 +169,19 @@ Results are displayed across tabs:
 
 ---
 
-### 7. Generate & Download Report
+### 7. MLoS Issues — Longitudinal View
+
+The **MLoS Issues** tab includes a longitudinal (wide-format) view of all settlement rows that failed at least one rule:
+
+- Each row represents one settlement
+- Each QC rule appears as a column (e.g. `Rule_6 | Security Compromised Y/N`)
+- **True** (red) = that settlement failed the rule
+- **False** (green) = no error on that rule for that row
+- Click **Download MLoS Issues — Longitudinal (Excel)** to export the colour-coded workbook
+
+---
+
+### 8. Generate & Download Report
 
 Go to the **Generate Report** tab to:
 
@@ -168,7 +193,7 @@ The report file is named: `{filename}_QC_Report.xlsx`
 
 ---
 
-### 8. Send QC Email
+### 9. Send QC Email
 
 Click **Send QC Email** in the Generate Report tab to notify the data team.
 
