@@ -1,16 +1,24 @@
 # MLOS Checkout QC
 
-A Streamlit app for running Quality Control (QC) checks on MLOS (Master List of Settlements) checkout SQLite files.
+A Streamlit app for running Quality Control (QC) checks on MLOS (Master List of Settlements) checkout files.
 
 ## Features
 
-- Upload any `.sqlite` checkout file
+- Upload `.sqlite`, `.csv`, `.xlsx`, or `.xls` checkout files
 - Automated QC checks on:
   - **MLoS layer** (`master_list_settlement_update_view`) — 15+ rules
   - **Takeoffpoint layer** (`mlos_takeoffpoint_view`) — 4 rules
 - Per-rule issue drilldown with expandable tables
 - Filterable raw data view
 - **Generate Report tab** — full QC verdict + downloadable 7-sheet Excel report
+
+## Supported File Formats
+
+| Format | MLoS Data | Takeoffpoint Data |
+|--------|-----------|-------------------|
+| `.sqlite` / `.db` | `master_list_settlement_update_view` | `mlos_takeoffpoint_view` |
+| `.xlsx` / `.xls` | Sheet 1 (or sheet named `mlos`) | Sheet 2 (or sheet named `takeoffpoint`) |
+| `.csv` | Entire CSV file | Not available — takeoff cross-checks skipped |
 
 ## How to Run Locally
 
