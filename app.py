@@ -514,6 +514,92 @@ Check-by-Check Summary:
         server.login(smtp_user, smtp_pass)
         server.sendmail(smtp_user, TO + CC, msg.as_string())
 
+# ─── Auto Correction ─────────────────────────────────────────────────────────────
+FLAG_COLS = [
+    "highrisk", "slums", "densely_populated", "hard2reach",
+    "border", "normadic", "scattered", "riverine", "fulani",
+]
+
+def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+    """
+    Apply three auto-corrections to the MLoS DataFrame.
+    Returns a corrected copy and a log of changes made.
+    """
+    import uuid as _uuid
+    df  = mlos.copy()
+    log = []   # list of {Column, Rule, Rows Fixed}
+
+    # ── Correction 1: Flag columns NULL → "NA" ───────────────────────────────
+    for col in FLAG_COLS:
+        if col not in df.columns:
+            continue
+        mask = df[col].isna() | df[col].astype(str).str.strip().eq("")
+        n = int(mask.sum())
+        if n:
+            df.loc[mask, col] = "NA"
+            log.append({"Column": col,
+                        "Correction": "NULL → NA",
+                        "Rows Fixed": n})
+
+    # ── Correction 2: Fully Accessible + NULL reason → "NA" ──────────────────
+    if "accessibility_status" in df.columns and "reasons_for_inaccessibility" in df.columns:
+        mask = (
+            df["accessibility_status"].astype(str).str.strip().eq("Fully Accessible") &
+            (df["reasons_for_inaccessibility"].isna() |
+             df["reasons_for_inaccessibility"].astype(str).str.strip().eq(""))
+        )
+        n = int(mask.sum())
+        if n:
+            df.loc[mask, "reasons_for_inaccessibility"] = "NA"
+            log.append({"Column": "reasons_for_inaccessibility",
+                        "Correction": "NULL → NA (Fully Accessible rows)",
+                        "Rows Fixed": n})
+
+    # ── Correction 3: Invalid globalid → strip braces / regenerate UUID ──────
+    if "globalid" in df.columns:
+        # Step 1: strip leading { and trailing } if present
+        brace_mask = df["globalid"].astype(str).str.match(r"^\{.*\}$", na=False)
+        n_brace = int(brace_mask.sum())
+        if n_brace:
+            df.loc[brace_mask, "globalid"] = (
+                df.loc[brace_mask, "globalid"]
+                  .astype(str).str.strip().str.strip("{}")
+            )
+
+        # Step 2: regenerate UUID for any still-invalid globalid
+        invalid_mask = ~vec_is_uuid(df["globalid"])
+        n_gen = int(invalid_mask.sum())
+        if n_gen:
+            df.loc[invalid_mask, "globalid"] = [
+                str(_uuid.uuid4()) for _ in range(n_gen)
+            ]
+
+        total_fixed = n_brace + n_gen
+        if total_fixed:
+            log.append({"Column": "globalid",
+                        "Correction": f"Braces stripped ({n_brace} rows); UUID regenerated ({n_gen} rows)",
+                        "Rows Fixed": total_fixed})
+
+    return df, log
+
+
+def build_corrected_excel(df: pd.DataFrame) -> bytes:
+    """Write the corrected MLoS DataFrame to an Excel file and return bytes."""
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="MLoS Corrected")
+        ws       = writer.sheets["MLoS Corrected"]
+        hdr_fill = PatternFill("solid", fgColor="1D4ED8")
+        hdr_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+        for ci, col in enumerate(df.columns, 1):
+            ws.column_dimensions[get_column_letter(ci)].width = max(
+                len(str(col)) + 4, 14)
+    return out.getvalue()
+
+
 # ─── QC Engine — MLoS ────────────────────────────────────────────────────────────
 def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
     checks, details = [], []
@@ -1061,8 +1147,9 @@ else:
         unsafe_allow_html=True)
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 QC Summary",
+    "🔧 Auto Correct",
     "🏘️ MLoS Issues",
     "📍 Takeoffpoint Issues",
     "🗺️ Boundary Issues",
@@ -1117,8 +1204,46 @@ with tab1:
         df_b = pd.DataFrame(boundary_checks)[["Status","Rule#","QC Check","Description","Failing Rows","Total Rows","Fail %"]]
         st.dataframe(df_b.style.apply(colour_rows, axis=1), use_container_width=True, hide_index=True)
 
-# ── Tab 2: MLoS Issues ────────────────────────────────────────────────────────────
+# ── Tab 2: Auto Correct ───────────────────────────────────────────────────────────
 with tab2:
+    st.markdown('<div class="sec-title">🔧 Auto Correct — MLoS Data Fixes</div>', unsafe_allow_html=True)
+    st.caption(
+        "The following corrections are applied automatically to the uploaded MLoS data:\n\n"
+        "1. **Flag columns** (`highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, "
+        "`normadic`, `scattered`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
+        "2. **Reason for Inaccessibility** — filled with `NA` where `accessibility_status` is "
+        "`Fully Accessible` and the reason is NULL\n"
+        "3. **GlobalID** — leading/trailing braces `{}` stripped; any still-invalid UUID is "
+        "replaced with a freshly generated UUID"
+    )
+    st.markdown("---")
+
+    corrected_df, correction_log = auto_correct_mlos(mlos_df)
+
+    if not correction_log:
+        st.success("✅ No corrections needed — all checked fields are already valid.")
+    else:
+        total_fixes = sum(r["Rows Fixed"] for r in correction_log)
+        st.info(f"🔧 **{len(correction_log)} correction(s) applied** across **{total_fixes:,} row(s)**.")
+        log_df = pd.DataFrame(correction_log)
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**📥 Download Corrected MLoS File**")
+        st.caption("The corrected data is exported as an Excel file ready for re-upload or submission.")
+        corrected_bytes = build_corrected_excel(corrected_df)
+        corrected_name  = filename.rsplit(".", 1)[0] + "_corrected.xlsx"
+        st.download_button(
+            label     = "⬇️ Download Corrected MLoS (Excel)",
+            data      = corrected_bytes,
+            file_name = corrected_name,
+            mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type      = "primary",
+        )
+
+
+# ── Tab 3: MLoS Issues ────────────────────────────────────────────────────────────
+with tab3:
     if mlos_detail.empty:
         st.success("✅ No issues found in the MLoS table — all checks passed!")
     else:
@@ -1155,8 +1280,8 @@ with tab2:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-# ── Tab 3: Takeoffpoint Issues ────────────────────────────────────────────────────
-with tab3:
+# ── Tab 4: Takeoffpoint Issues ────────────────────────────────────────────────────
+with tab4:
     if tp_detail.empty:
         st.success("✅ No issues found in the Takeoffpoint table — all checks passed!")
     else:
@@ -1188,8 +1313,8 @@ with tab3:
                            file_name=filename.replace(".sqlite","")+"_tp_issues.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Tab 4: Boundary Issues ────────────────────────────────────────────────────────
-with tab4:
+# ── Tab 5: Boundary Issues ────────────────────────────────────────────────────────
+with tab5:
     if boundary_detail.empty:
         st.success("✅ All ward codes match the boundary reference and all coordinates fall within their declared ward boundaries.")
     else:
@@ -1221,8 +1346,8 @@ with tab4:
                            file_name=filename.rsplit(".",1)[0] + "_boundary_issues.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Tab 5: Raw Data ───────────────────────────────────────────────────────────────
-with tab5:
+# ── Tab 6: Raw Data ───────────────────────────────────────────────────────────────
+with tab6:
     rt1, rt2 = st.tabs(["🏘️ MLoS View", "📍 Takeoffpoint View"])
     with rt1:
         st.markdown(f"**{len(mlos_df):,} rows × {len(mlos_df.columns)} columns**")
@@ -1255,8 +1380,8 @@ with tab5:
         st.markdown(f"**{len(takeoff_df):,} rows × {len(takeoff_df.columns)} columns**")
         st.dataframe(takeoff_df, use_container_width=True, hide_index=True, height=420)
 
-# ── Tab 6: Generate Report ────────────────────────────────────────────────────────
-with tab6:
+# ── Tab 7: Generate Report ────────────────────────────────────────────────────────
+with tab7:
     st.markdown('<div class="sec-title">📄 QC Report — Summary &amp; Download</div>', unsafe_allow_html=True)
 
     # Verdict
