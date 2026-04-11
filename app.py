@@ -997,15 +997,53 @@ def build_excel_report(filename, mlos_checks, mlos_detail, tp_checks, tp_detail,
     return out.getvalue()
 
 
+# ─── Takeoffpoint File Loader ────────────────────────────────────────────────────
+def load_takeoffpoint_file(tp_file) -> pd.DataFrame:
+    """Parse a separately uploaded takeoffpoint CSV or Excel file."""
+    ext = tp_file.name.rsplit(".", 1)[-1].lower()
+    tp_file.seek(0)
+    if ext == "csv":
+        return pd.read_csv(tp_file, dtype=str)
+    xl = pd.ExcelFile(tp_file)
+    tp_aliases = {TAKEOFF_VIEW.lower(), "takeoffpoint", "takeoff", "takeoff_point"}
+    tp_sheet = next(
+        (s for s in xl.sheet_names if s.lower() in tp_aliases),
+        xl.sheet_names[0],
+    )
+    return xl.parse(tp_sheet, dtype=str)
+
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### 📁 Upload File")
+    st.markdown("### 📁 Upload Files")
+
+    st.markdown("**MLoS Checkout File**")
     uploaded = st.file_uploader(
-        "Upload SQLite, CSV, or Excel file",
+        "Upload MLoS file",
         type=["sqlite", "db", "sqlite3", "csv", "xlsx", "xls"],
         key="sqlite_upload", label_visibility="collapsed",
     )
-    st.caption("Supported: `.sqlite` · `.csv` · `.xlsx` · `.xls`")
+    st.caption("`.sqlite` · `.csv` · `.xlsx` · `.xls`")
+
+    st.markdown("**Takeoffpoint File** *(optional)*")
+    uploaded_tp = st.file_uploader(
+        "Upload Takeoffpoint file",
+        type=["csv", "xlsx", "xls"],
+        key="tp_upload", label_visibility="collapsed",
+    )
+    st.caption("Upload separately when MLoS file is `.csv`, or to override the built-in takeoffpoint sheet.")
+
+    st.markdown("")
+    run_qc_btn = st.button(
+        "▶️ Run QC",
+        type="primary",
+        use_container_width=True,
+        disabled=(uploaded is None),
+    )
+    if run_qc_btn and uploaded:
+        tp_key = (uploaded_tp.name, getattr(uploaded_tp, "size", None)) if uploaded_tp else None
+        st.session_state["submitted_key"] = (
+            uploaded.name, getattr(uploaded, "size", None), tp_key
+        )
     st.markdown("---")
     st.markdown("#### 📋 QC Rules Reference")
     with st.expander("🔧 Auto Correct Rules", expanded=False):
@@ -1077,32 +1115,45 @@ with st.sidebar:
 st.markdown("""
 <div class="app-header">
   <h1>🗺️ MLOS CHECKOUT QC</h1>
-  <p>Master List of Settlements — Quality Control Dashboard &nbsp;|&nbsp; Upload a SQLite checkout file to begin</p>
+  <p>Master List of Settlements — Quality Control Dashboard &nbsp;|&nbsp; Upload your files and click ▶️ Run QC to begin</p>
 </div>
 """, unsafe_allow_html=True)
 
 if not uploaded:
-    st.info("👈 **Upload a file** (`.sqlite`, `.csv`, `.xlsx`, or `.xls`) using the sidebar to run QC checks.")
+    st.info("👈 **Upload your MLoS file** (and optionally a Takeoffpoint file) using the sidebar, then click **▶️ Run QC**.")
     with st.expander("ℹ️ About this tool", expanded=True):
         st.markdown("""
 This tool runs automated Quality Control on MLOS checkout files across **4 QC layers**.
 
 **Supported formats:**
-- **SQLite** (`.sqlite`, `.db`) — reads views directly
+- **SQLite** (`.sqlite`, `.db`) — reads MLoS and Takeoffpoint views directly
 - **Excel** (`.xlsx`, `.xls`) — Sheet 1 = MLoS, Sheet 2 = Takeoffpoint
-- **CSV** (`.csv`) — MLoS data only (takeoffpoint cross-checks skipped)
+- **CSV** (`.csv`) — MLoS data only; upload a separate Takeoffpoint file to enable cross-checks
+
+**Takeoffpoint file (separate upload):**
+Upload a `.csv` or `.xlsx` Takeoffpoint file alongside any MLoS format.
+It overrides the built-in Takeoffpoint sheet for Excel/SQLite files.
 
 **QC Layers:**
 - 🔎 **Schema Alignment** (S1–S2) — verifies all required columns are present
-- 🏘️ **MLoS Rules** (2–17) — 15+ data integrity checks
+- 🏘️ **MLoS Rules** (2–17) — data integrity checks
 - 📍 **Takeoffpoint Rules** (TP2–TP5) — 4 cross-table checks
-- 🗺️ **Boundary Checks** (B1–B3) — ward code, coordinate, and state name validation against admin boundary reference
+- 🗺️ **Boundary Checks** (B0–B3) — ward code, coordinate, and state name validation against admin boundary reference
 
 **Outputs:**
-- Pass Rate % and Fail Rate % on the dashboard
+- Pass Rate %, Fail Rate %, and 🏆 Weighted QC Score on the dashboard
 - Per-rule issue drilldown with downloadable Excel reports
 - Full QC report (Excel) and email summary to the data team
         """)
+    st.stop()
+
+# ─── Determine submitted state ────────────────────────────────────────────────────
+_tp_key = (uploaded_tp.name, getattr(uploaded_tp, "size", None)) if uploaded_tp else None
+_current_key = (uploaded.name, getattr(uploaded, "size", None), _tp_key)
+_qc_submitted = st.session_state.get("submitted_key") == _current_key
+
+if not _qc_submitted:
+    st.info("✅ File(s) ready. Click **▶️ Run QC** in the sidebar to start the quality check.")
     st.stop()
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────────
@@ -1114,10 +1165,19 @@ with st.spinner("Loading file…"):
         st.error(f"❌ Failed to load file: {e}")
         st.stop()
 
+# Override takeoffpoint with separately uploaded file if provided
+if uploaded_tp is not None:
+    try:
+        uploaded_tp.seek(0)
+        takeoff_df = load_takeoffpoint_file(uploaded_tp)
+    except Exception as e:
+        st.warning(f"⚠️ Could not load Takeoffpoint file: {e} — takeoffpoint cross-checks will be skipped.")
+        takeoff_df = pd.DataFrame()
+
 filename = uploaded.name
 
 # ─── RUN QC ───────────────────────────────────────────────────────────────────────
-qc_cache_key = (filename, getattr(uploaded, "size", None))
+qc_cache_key = _current_key
 boundary_ref, boundary_bbox = load_boundary_refs()
 
 if st.session_state.get("qc_cache_key") == qc_cache_key:
