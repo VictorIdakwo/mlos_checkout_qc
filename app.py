@@ -120,7 +120,10 @@ def load_view(conn, view_name):
 def load_csv(uploaded_file):
     """Load a CSV file as the MLoS table. Returns (mlos_df, empty takeoff_df)."""
     uploaded_file.seek(0)
-    mlos_df = pd.read_csv(uploaded_file, dtype=str)
+    # keep_default_na=False prevents pandas from silently converting the valid
+    # domain value "NA" (used in flag columns like highrisk, slums, etc.) to NaN.
+    # Only truly empty cells remain as NaN.
+    mlos_df = pd.read_csv(uploaded_file, dtype=str, keep_default_na=False)
     takeoff_df = pd.DataFrame()
     return mlos_df, takeoff_df
 
@@ -145,8 +148,10 @@ def load_xlsx(uploaded_file):
         sheet_names[1] if len(sheet_names) > 1 else None
     )
 
-    mlos_df    = xl.parse(mlos_sheet, dtype=str)
-    takeoff_df = xl.parse(takeoff_sheet, dtype=str) if takeoff_sheet else pd.DataFrame()
+    # keep_default_na=False prevents pandas from converting the valid domain value
+    # "NA" (used in flag columns) to NaN. Only truly empty cells remain as NaN.
+    mlos_df    = xl.parse(mlos_sheet,   dtype=str, keep_default_na=False)
+    takeoff_df = xl.parse(takeoff_sheet, dtype=str, keep_default_na=False) if takeoff_sheet else pd.DataFrame()
     return mlos_df, takeoff_df
 
 def get_uploaded_data(uploaded_file, progress=None):
@@ -1155,14 +1160,14 @@ def load_takeoffpoint_file(tp_file) -> pd.DataFrame:
     ext = tp_file.name.rsplit(".", 1)[-1].lower()
     tp_file.seek(0)
     if ext == "csv":
-        return pd.read_csv(tp_file, dtype=str)
+        return pd.read_csv(tp_file, dtype=str, keep_default_na=False)
     xl = pd.ExcelFile(tp_file)
     tp_aliases = {TAKEOFF_VIEW.lower(), "takeoffpoint", "takeoff", "takeoff_point"}
     tp_sheet = next(
         (s for s in xl.sheet_names if s.lower() in tp_aliases),
         xl.sheet_names[0],
     )
-    return xl.parse(tp_sheet, dtype=str)
+    return xl.parse(tp_sheet, dtype=str, keep_default_na=False)
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────────
 with st.sidebar:
