@@ -364,8 +364,10 @@ BOUNDARY_BBOX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "w
 @st.cache_data(show_spinner=False)
 def load_boundary_refs():
     """Load ward code reference and bounding box lookup tables."""
-    ref_df  = pd.read_csv(BOUNDARY_REF_PATH,  dtype=str) if os.path.exists(BOUNDARY_REF_PATH)  else pd.DataFrame()
-    bbox_df = pd.read_csv(BOUNDARY_BBOX_PATH, dtype=str) if os.path.exists(BOUNDARY_BBOX_PATH) else pd.DataFrame()
+    # keep_default_na=False prevents pandas from converting the string "NA"
+    # (the state_code for Nasarawa) into NaN, which would break state filtering.
+    ref_df  = pd.read_csv(BOUNDARY_REF_PATH,  dtype=str, keep_default_na=False) if os.path.exists(BOUNDARY_REF_PATH)  else pd.DataFrame()
+    bbox_df = pd.read_csv(BOUNDARY_BBOX_PATH, dtype=str, keep_default_na=False) if os.path.exists(BOUNDARY_BBOX_PATH) else pd.DataFrame()
     for col in ["min_lon","min_lat","max_lon","max_lat"]:
         if col in bbox_df.columns:
             bbox_df[col] = pd.to_numeric(bbox_df[col], errors="coerce")
@@ -412,7 +414,9 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
             and "ward_code" in bbox_df.columns
             and "state_code" in mlos.columns
             and "state_code" in ref_df.columns):
-        mlos_states     = set(mlos["state_code"].dropna().astype(str).str.strip().str.upper())
+        # Use fillna("") instead of dropna() so that pandas-read "NA" string
+        # values (which SQLite returns as NaN) still participate in the filter.
+        mlos_states     = set(mlos["state_code"].fillna("").astype(str).str.strip().str.upper()) - {""}
         ref_norm        = ref_df.copy()
         ref_norm["_sc"] = ref_norm["state_code"].astype(str).str.strip().str.upper()
         state_wards     = set(ref_norm.loc[ref_norm["_sc"].isin(mlos_states), "ward_code"].dropna().astype(str).str.strip())
