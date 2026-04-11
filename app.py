@@ -1207,18 +1207,40 @@ mlos_fail_rows      = len(mlos_detail)
 tp_fail_rows        = len(tp_detail)
 boundary_fail_rows  = len(boundary_detail)
 
+# ── Weighted Score ──────────────────────────────────────────────────────────────────
+# Weights: Schema 10%, MLoS 50%, Takeoffpoint 30%, Boundary 10%
+LAYER_WEIGHTS = {
+    "schema":   0.10,
+    "mlos":     0.50,
+    "tp":       0.30,
+    "boundary": 0.10,
+}
+
+def _layer_pass_rate(checks):
+    if not checks:
+        return 1.0   # no checks → full credit (layer not applicable)
+    passing = sum(1 for c in checks if "FAIL" not in c["Status"])
+    return passing / len(checks)
+
+schema_score   = _layer_pass_rate(schema_checks)   * LAYER_WEIGHTS["schema"]   * 100
+mlos_score     = _layer_pass_rate(mlos_checks)     * LAYER_WEIGHTS["mlos"]     * 100
+tp_score       = _layer_pass_rate(tp_checks)       * LAYER_WEIGHTS["tp"]       * 100
+boundary_score = _layer_pass_rate(boundary_checks) * LAYER_WEIGHTS["boundary"] * 100
+weighted_score = schema_score + mlos_score + tp_score + boundary_score
+
 # ─── FILE INFO + METRICS ──────────────────────────────────────────────────────────
 st.success(f"✅ Loaded **{filename}** — MLoS: **{len(mlos_df):,} rows** | Takeoffpoint: **{len(takeoff_df):,} rows**")
 
-c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
-c1.metric("📄 MLoS Rows",      f"{len(mlos_df):,}")
-c2.metric("📍 TP Rows",         f"{len(takeoff_df):,}")
-c3.metric("🔍 Checks Run",      f"{len(all_checks)}")
-c4.metric("✅ Passing",         f"{n_pass}")
-c5.metric("❌ Failing",         f"{n_fail}")
-c6.metric("⚠️ Issue Rows",     f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
-c7.metric("📈 Pass Rate",       pct_pass)
-c8.metric("📉 Fail Rate",       pct_fail)
+c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(9)
+c1.metric("📄 MLoS Rows",       f"{len(mlos_df):,}")
+c2.metric("📍 TP Rows",          f"{len(takeoff_df):,}")
+c3.metric("🔍 Checks Run",       f"{len(all_checks)}")
+c4.metric("✅ Passing",          f"{n_pass}")
+c5.metric("❌ Failing",          f"{n_fail}")
+c6.metric("⚠️ Issue Rows",      f"{mlos_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
+c7.metric("📈 Pass Rate",        pct_pass)
+c8.metric("📉 Fail Rate",        pct_fail)
+c9.metric("🏆 Weighted Score",   f"{weighted_score:.1f}%")
 
 st.markdown("---")
 
@@ -1250,6 +1272,30 @@ with tab2:
         if "FAIL" in str(row.get("Status","")):
             return ["background-color:#fff1f2; color:#be123c"] * len(row)
         return ["background-color:#f0fdf4; color:#15803d"] * len(row)
+
+    # ── Weighted Score Breakdown ──────────────────────────────────────────────────
+    st.markdown('<div class="sec-title">🏆 Weighted QC Score</div>', unsafe_allow_html=True)
+
+    score_colour = "#15803d" if weighted_score >= 80 else ("#d97706" if weighted_score >= 60 else "#be123c")
+    st.markdown(
+        f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;'
+        f'padding:16px 24px;margin-bottom:16px;">'
+        f'<span style="font-size:2rem;font-weight:800;color:{score_colour}">{weighted_score:.1f}%</span>'
+        f'<span style="font-size:0.9rem;color:#64748b;margin-left:12px;">Overall Weighted Score</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    score_rows = [
+        {"QC Layer": "🔎 Schema Alignment",  "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(schema_checks)*100:.1f}%",   "Weighted Contribution": f"{schema_score:.1f}%"},
+        {"QC Layer": "🏘️ MLoS Rules",        "Weight": "50%", "Layer Pass Rate": f"{_layer_pass_rate(mlos_checks)*100:.1f}%",     "Weighted Contribution": f"{mlos_score:.1f}%"},
+        {"QC Layer": "📍 Takeoffpoint Rules", "Weight": "30%", "Layer Pass Rate": f"{_layer_pass_rate(tp_checks)*100:.1f}%",       "Weighted Contribution": f"{tp_score:.1f}%"},
+        {"QC Layer": "🗺️ Boundary Checks",   "Weight": "10%", "Layer Pass Rate": f"{_layer_pass_rate(boundary_checks)*100:.1f}%", "Weighted Contribution": f"{boundary_score:.1f}%"},
+        {"QC Layer": "🏆 Total",              "Weight": "100%","Layer Pass Rate": "—",                                             "Weighted Contribution": f"{weighted_score:.1f}%"},
+    ]
+    st.dataframe(pd.DataFrame(score_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Schema Alignment ─────────────────────────────────────────────────────────
     st.markdown('<div class="sec-title">🔎 Schema Alignment — QC Results</div>', unsafe_allow_html=True)
