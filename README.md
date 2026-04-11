@@ -77,11 +77,11 @@ Auto Correct runs automatically **before** every QC. The corrected MLoS data is 
 
 | # | Field(s) | Correction |
 |---|----------|------------|
-| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | NULL → `NA` |
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani` | NULL → `NA` |
 | 2 | `scattered` | NULL or `NA` → `N` |
 | 3 | `reasons_for_inaccessibility` | NULL → `NA` where `accessibility_status` is `Fully Accessible` |
 | 4 | `source` | NULL or empty → `IE` |
-| 5 | `globalid` | All `{` `}` stripped; any still-invalid UUID replaced with a fresh generated UUID |
+| 5 | `eha_guid` | All `{` `}` stripped; any still-invalid UUID replaced with a fresh generated UUID |
 
 The **🔧 Auto Correct tab** shows the correction log and a **⬇️ Download Full MLoS — Auto Corrected (Excel)** button (always visible).
 
@@ -91,7 +91,7 @@ The **🔧 Auto Correct tab** shows the correction log and a **⬇️ Download F
 
 Checks whether the uploaded file contains all required columns. Schema failures are reported without stopping the remaining checks.
 
-#### Required MLoS Columns (41)
+#### Required MLoS Columns (43)
 
 | Column | Description | Used In |
 |--------|-------------|---------|
@@ -100,7 +100,7 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `lga_code` | LGA numeric code | Base identifier |
 | `lga_name` | LGA name | Base identifier |
 | `ward_name` | Ward name | Base identifier |
-| `ward_code` | Ward code | Rules 4, B1, B2, B3 |
+| `ward_code` | Ward code | Rules 4, B0, B1, B2, B3 |
 | `takeoffpoint` | Takeoffpoint name | Rules 2, TP2 |
 | `takeoffpoint_code` | Takeoffpoint code | Rules 3, TP3 |
 | `settlement_name` | Settlement name | Base identifier |
@@ -114,7 +114,7 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `habitational_status` | Abandoned / Migrated / Inhabited / Partially Inhabited | Rule 9 |
 | `set_population` | Total settlement population | Rules 10, 11 |
 | `set_target` | Target count | Rule 10 |
-| `number_of_houses` | House count | Rule 11 |
+| `number_of_household` | Household count | Rule 11 |
 | `noncompliant_household` | Non-compliant household count | Base field |
 | `team_code` | Team code (varchar) | Base field |
 | `day_of_activity` | Day of activity | Base field |
@@ -126,15 +126,17 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `densely_populated` | Y, N, or NA | Rule 14 |
 | `hard2reach` | Y, N, or NA | Rule 14 |
 | `border` | Y, N, or NA | Rule 14 |
-| `normadic` | Y, N, or NA | Rule 14 |
+| `nomadic` | Y, N, or NA | Rule 14 |
 | `riverine` | Y, N, or NA | Rule 14 |
 | `fulani` | Y, N, or NA | Rule 14 |
 | `timestamp` | Record timestamp | Metadata |
 | `last_updated` | Last update timestamp | Metadata |
 | `source` | Data source | Auto Correct (→ `IE` if empty) |
 | `editor` | Editor username | Rule 16 |
-| `globalid` | Record UUID | Rule 17, Auto Correct |
-| `fc_globalid` | Feature class UUID | Base field |
+| `validation_status` | Validation status | Base field (Nullable) |
+| `master_id` | Master record ID | Base field (Nullable) |
+| `mlos_id` | MLoS record ID | Base field (Nullable) |
+| `eha_guid` | Record UUID | Rule 17, Auto Correct |
 | `settlementarea_globalid` | Settlement area UUID | Base field |
 
 #### Required Takeoffpoint Columns (4)
@@ -162,11 +164,11 @@ Data integrity rules applied to the MLoS table.
 | 8 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
 | 9 | Habitational Status Valid | Must be: `Abandoned`, `Migrated`, `Inhabited`, or `Partially Inhabited` |
 | 10 | set_target ≤ set_population | `set_target` must not exceed `set_population` |
-| 11 | number_of_houses ≤ set_population | `number_of_houses` must not exceed `set_population` |
+| 11 | number_of_household ≤ set_population | `number_of_household` must not exceed `set_population` |
 | 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
-| 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
+| 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
-| 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
+| 17 | eha_guid is UUID | `eha_guid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
 > Rules 5 (No Null in Required Fields), 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 5 was removed as null checks are not enforced — `primarysettlement_name`, `alternate_name`, and `reasons_for_inaccessibility` are explicitly nullable; Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
 

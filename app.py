@@ -98,7 +98,7 @@ EDITOR_RE   = re.compile(r'^[a-z]+\.[a-z]+$')
 # Nullable MLoS fields (can be null — not subject to null checks):
 # primarysettlement_name, alternate_name, reasons_for_inaccessibility
 YN_NA_COLS  = {"highrisk","slums","densely_populated","hard2reach","border",
-               "normadic","riverine","fulani"}
+               "nomadic","riverine","fulani"}
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────────
 def load_sqlite(uploaded_file):
@@ -216,11 +216,11 @@ MLOS_REQUIRED_COLS = {
     "takeoffpoint", "takeoffpoint_code", "settlement_name", "primarysettlement_name",
     "alternate_name", "latitude", "longitude", "security_compromised",
     "accessibility_status", "reasons_for_inaccessibility", "habitational_status",
-    "set_population", "set_target", "number_of_houses", "noncompliant_household",
+    "set_population", "set_target", "number_of_household", "noncompliant_household",
     "team_code", "day_of_activity", "urban", "rural", "highrisk", "slums",
-    "densely_populated", "hard2reach", "border", "normadic", "scattered",
+    "densely_populated", "hard2reach", "border", "nomadic", "scattered",
     "riverine", "fulani", "timestamp", "source", "last_updated", "editor",
-    "globalid", "fc_globalid", "settlementarea_globalid",
+    "validation_status", "master_id", "mlos_id", "eha_guid", "settlementarea_globalid",
 }
 TAKEOFF_REQUIRED_COLS = {"name", "code", "wardcode", "globalid"}
 
@@ -570,7 +570,7 @@ Check-by-Check Summary:
 # ─── Auto Correction ─────────────────────────────────────────────────────────────
 FLAG_COLS = [
     "highrisk", "slums", "densely_populated", "hard2reach",
-    "border", "normadic", "scattered", "riverine", "fulani",
+    "border", "nomadic", "scattered", "riverine", "fulani",
 ]
 
 def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
@@ -632,28 +632,28 @@ def auto_correct_mlos(mlos: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
                         "Correction": "NULL / empty → IE",
                         "Rows Fixed": n})
 
-    # ── Correction 4: globalid — strip braces then regenerate invalid UUIDs ──
-    if "globalid" in df.columns:
-        # Step 1: strip any leading { and trailing } characters
-        has_braces = df["globalid"].astype(str).str.contains(r"[\{\}]", na=False)
+    # ── Correction 4: eha_guid — strip braces then regenerate invalid UUIDs ──
+    if "eha_guid" in df.columns:
+        # Step 1: strip any { } characters
+        has_braces = df["eha_guid"].astype(str).str.contains(r"[\{\}]", na=False)
         n_brace = int(has_braces.sum())
         if n_brace:
-            df.loc[has_braces, "globalid"] = (
-                df.loc[has_braces, "globalid"]
+            df.loc[has_braces, "eha_guid"] = (
+                df.loc[has_braces, "eha_guid"]
                   .astype(str).str.replace(r"[\{\}]", "", regex=True).str.strip()
             )
 
         # Step 2: generate a fresh UUID for any value still not a valid UUID
-        invalid_mask = ~vec_is_uuid(df["globalid"])
+        invalid_mask = ~vec_is_uuid(df["eha_guid"])
         n_gen = int(invalid_mask.sum())
         if n_gen:
-            df.loc[invalid_mask, "globalid"] = [
+            df.loc[invalid_mask, "eha_guid"] = [
                 str(_uuid.uuid4()) for _ in range(n_gen)
             ]
 
         total_fixed = n_brace + n_gen
         if total_fixed:
-            log.append({"Column": "globalid",
+            log.append({"Column": "eha_guid",
                         "Correction": f"Braces removed ({n_brace} rows); UUID regenerated ({n_gen} rows)",
                         "Rows Fixed": total_fixed})
 
@@ -758,13 +758,13 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             "set_target must not exceed set_population",
             mask, ["set_target", "set_population"])
 
-    # R11 — number_of_houses must not exceed set_population
-    if "number_of_houses" in mlos.columns and "set_population" in mlos.columns:
-        mask = (pd.to_numeric(mlos["number_of_houses"], errors="coerce") >
+    # R11 — number_of_household must not exceed set_population
+    if "number_of_household" in mlos.columns and "set_population" in mlos.columns:
+        mask = (pd.to_numeric(mlos["number_of_household"], errors="coerce") >
                 pd.to_numeric(mlos["set_population"], errors="coerce")).fillna(False)
-        add("11", "number_of_houses ≤ set_population",
-            "number_of_houses must not exceed set_population",
-            mask, ["number_of_houses", "set_population"])
+        add("11", "number_of_household ≤ set_population",
+            "number_of_household must not exceed set_population",
+            mask, ["number_of_household", "set_population"])
 
     # R13
     for col in ["urban","rural","scattered"]:
@@ -799,10 +799,10 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             ~vec_is_editor(mlos["editor"]), ["editor"])
 
     # R17
-    if "globalid" in mlos.columns:
-        add("17","globalid is UUID",
-            "globalid must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
-            ~vec_is_uuid(mlos["globalid"]), ["globalid"])
+    if "eha_guid" in mlos.columns:
+        add("17","eha_guid is UUID",
+            "eha_guid must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
+            ~vec_is_uuid(mlos["eha_guid"]), ["eha_guid"])
 
     # Keep original mlos_df indices so make_longitudinal_df can match failing rows correctly
     return checks, pd.concat(details) if details else pd.DataFrame()
@@ -1012,11 +1012,11 @@ with st.sidebar:
         st.markdown("""
 | # | Field | Correction Applied |
 |---|-------|--------------------|
-| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` | NULL → `NA` |
+| 1 | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `riverine`, `fulani` | NULL → `NA` |
 | 1b | `scattered` | NULL or `NA` → `N` |
 | 2 | `reasons_for_inaccessibility` | NULL → `NA` where `accessibility_status = Fully Accessible` |
 | 3 | `source` | NULL / empty → `IE` |
-| 4 | `globalid` | `{` `}` stripped; invalid UUID → new generated UUID |
+| 4 | `eha_guid` | `{` `}` stripped; invalid UUID → new generated UUID |
 
 > Auto Correct runs automatically **before** QC checks on every upload.
         """)
@@ -1028,7 +1028,7 @@ with st.sidebar:
 | S2 | All 4 required Takeoffpoint columns present |
 
 **MLoS required columns:**
-`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `takeoffpoint`, `takeoffpoint_code`, `settlement_name`, `primarysettlement_name`, `alternate_name`, `latitude`, `longitude`, `security_compromised`, `accessibility_status`, `reasons_for_inaccessibility`, `habitational_status`, `set_population`, `set_target`, `number_of_houses`, `noncompliant_household`, `team_code`, `day_of_activity`, `urban`, `rural`, `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `scattered`, `riverine`, `fulani`, `timestamp`, `source`, `last_updated`, `editor`, `globalid`, `fc_globalid`, `settlementarea_globalid`
+`state_code`, `state_name`, `lga_code`, `lga_name`, `ward_name`, `ward_code`, `takeoffpoint`, `takeoffpoint_code`, `settlement_name`, `primarysettlement_name`, `alternate_name`, `latitude`, `longitude`, `security_compromised`, `accessibility_status`, `reasons_for_inaccessibility`, `habitational_status`, `set_population`, `set_target`, `number_of_household`, `noncompliant_household`, `team_code`, `day_of_activity`, `urban`, `rural`, `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `nomadic`, `scattered`, `riverine`, `fulani`, `timestamp`, `source`, `last_updated`, `editor`, `validation_status`, `master_id`, `mlos_id`, `eha_guid`, `settlementarea_globalid`
 
 **Takeoffpoint required columns:**
 `name`, `code`, `wardcode`, `globalid`
@@ -1045,11 +1045,11 @@ with st.sidebar:
 | 8 | Partial/Inaccessible requires reason |
 | 9 | habitational_status valid |
 | 10 | set_target ≤ set_population |
-| 11 | number_of_houses ≤ set_population |
+| 11 | number_of_household ≤ set_population |
 | 13 | urban/rural/scattered = Y/N (no conflict) |
-| 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, normadic, riverine, fulani) |
+| 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, nomadic, riverine, fulani) |
 | 16 | editor = firstname.surname (lowercase) |
-| 17 | globalid = valid UUID |
+| 17 | eha_guid = valid UUID |
         """)
     with st.expander("📍 Takeoffpoint Rules", expanded=False):
         st.markdown("""
@@ -1340,12 +1340,12 @@ with tab1:
     st.caption(
         "The following corrections are applied automatically to the uploaded MLoS data:\n\n"
         "1. **Flag columns** (`highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, "
-        "`normadic`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
+        "`nomadic`, `riverine`, `fulani`) — NULL values filled with `NA`\n"
         "2. **Scattered** — NULL or `NA` values filled with `N`\n"
         "3. **Reason for Inaccessibility** — filled with `NA` where `accessibility_status` is "
         "`Fully Accessible` and the reason is NULL\n"
         "4. **Source** — NULL or empty values replaced with `IE`\n"
-        "5. **GlobalID** — all `{` and `}` characters stripped; any still-invalid UUID is "
+        "5. **eha_guid** — all `{` and `}` characters stripped; any still-invalid UUID is "
         "replaced with a freshly generated UUID"
     )
     st.markdown("---")
@@ -1459,12 +1459,18 @@ with tab5:
 
         for check in boundary_checks:
             if "FAIL" not in check["Status"]: continue
-            rn     = check["Rule#"]
-            subset = boundary_detail[boundary_detail["Rule#"] == rn].drop(columns=["Rule#","Rule"], errors="ignore")
-            n      = len(subset)
+            rn = check["Rule#"]
+            has_detail = (not boundary_detail.empty and "Rule#" in boundary_detail.columns)
+            subset = (boundary_detail[boundary_detail["Rule#"] == rn]
+                      .drop(columns=["Rule#","Rule"], errors="ignore")
+                      if has_detail else pd.DataFrame())
+            n = len(subset)
             with st.expander(f"❌  Rule {rn} — {check['QC Check']}  ({n:,} row{'s' if n!=1 else ''})", expanded=False):
                 st.caption(f"📌 {check['Description']}")
-                st.dataframe(subset, use_container_width=True, hide_index=True)
+                if subset.empty:
+                    st.info("ℹ️ No row-level detail available for this check.")
+                else:
+                    st.dataframe(subset, use_container_width=True, hide_index=True)
 
         if boundary_detail.empty:
             st.info("ℹ️ No row-level detail available for the failing boundary check(s) above.")
