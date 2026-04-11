@@ -969,23 +969,30 @@ if st.session_state.get("qc_cache_key") == qc_cache_key:
     boundary_detail  = st.session_state["boundary_detail"]
     load_progress.progress(100)
 else:
+    qc_bar = st.progress(0, text="⏳ Starting QC checks…")
     with st.status("Running QC checks…", expanded=True) as _qc_status:
+
+        # ── Step 1: Schema Alignment ──────────────────────────────────────
+        qc_bar.progress(5, text="🔎 Step 1 / 4 — Schema Alignment…")
         st.write("🔎 Step 1 / 4 — Schema Alignment")
-        load_progress.progress(5)
         schema_checks, schema_detail = run_schema_qc(mlos_df, takeoff_df)
         schema_fail = sum(1 for c in schema_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if schema_fail else '✅'} Schema: "
                  f"{len(schema_checks) - schema_fail}/{len(schema_checks)} checks passed")
+        qc_bar.progress(25, text="✅ Step 1 / 4 — Schema Alignment complete")
 
+        # ── Step 2: MLoS Rules ────────────────────────────────────────────
+        qc_bar.progress(26, text="🏘️ Step 2 / 4 — MLoS Rules…")
         st.write("🏘️ Step 2 / 4 — MLoS Rules")
-        load_progress.progress(15)
         mlos_checks, mlos_detail = run_mlos_qc(mlos_df, takeoff_df)
         mlos_qc_fail = sum(1 for c in mlos_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if mlos_qc_fail else '✅'} MLoS: "
                  f"{len(mlos_checks) - mlos_qc_fail}/{len(mlos_checks)} checks passed")
+        qc_bar.progress(50, text="✅ Step 2 / 4 — MLoS Rules complete")
 
+        # ── Step 3: Takeoffpoint Rules ────────────────────────────────────
+        qc_bar.progress(51, text="📍 Step 3 / 4 — Takeoffpoint Rules…")
         st.write("📍 Step 3 / 4 — Takeoffpoint Rules")
-        load_progress.progress(60)
         if takeoff_df.empty:
             tp_checks, tp_detail = [], pd.DataFrame()
             st.write("   ⚠️ Takeoffpoint data not available — skipped")
@@ -994,13 +1001,16 @@ else:
             tp_qc_fail = sum(1 for c in tp_checks if "FAIL" in c["Status"])
             st.write(f"   {'❌' if tp_qc_fail else '✅'} Takeoffpoint: "
                      f"{len(tp_checks) - tp_qc_fail}/{len(tp_checks)} checks passed")
+        qc_bar.progress(75, text="✅ Step 3 / 4 — Takeoffpoint Rules complete")
 
+        # ── Step 4: Boundary Checks ───────────────────────────────────────
+        qc_bar.progress(76, text="🗺️ Step 4 / 4 — Boundary Checks…")
         st.write("🗺️ Step 4 / 4 — Boundary Checks")
-        load_progress.progress(80)
         boundary_checks, boundary_detail = run_ward_boundary_qc(mlos_df, boundary_ref, boundary_bbox)
         b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
         st.write(f"   {'❌' if b_fail else '✅'} Boundary: "
                  f"{len(boundary_checks) - b_fail}/{len(boundary_checks)} checks passed")
+        qc_bar.progress(100, text="✅ All QC checks complete!")
 
         load_progress.progress(100)
         _qc_status.update(label="QC checks complete!", state="complete", expanded=False)
@@ -1139,7 +1149,7 @@ with tab2:
                     return "background-color:#F0FDF4; color:#166534"
                 return ""
 
-            styled = long_df.style.applymap(highlight_flags, subset=rule_flag_cols)
+            styled = long_df.style.map(highlight_flags, subset=rule_flag_cols)
             st.dataframe(styled, use_container_width=True, hide_index=True, height=350)
 
         long_xlsx = build_longitudinal_mlos(mlos_df, mlos_checks, mlos_detail)
