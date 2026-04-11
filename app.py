@@ -559,13 +559,23 @@ def run_settlement_qc(mlos: pd.DataFrame):
             mlos.duplicated(subset=["ward_code", "settlement_name"], keep=False),
             ["ward_code", "settlement_name"])
 
-    # SQ2 — latitude and longitude must be present and non-zero
+    # SQ2 — latitude and longitude must not be null
     if "latitude" in mlos.columns and "longitude" in mlos.columns:
         lat = pd.to_numeric(mlos["latitude"],  errors="coerce")
         lon = pd.to_numeric(mlos["longitude"], errors="coerce")
-        add("SQ2", "Latitude/Longitude Filled and Non-Zero",
-            "latitude and longitude must be present and not equal to zero",
-            lat.isna() | lon.isna() | (lat == 0) | (lon == 0),
+        add("SQ2", "Latitude/Longitude — Not Null",
+            "latitude and longitude must not be null or missing",
+            lat.isna() | lon.isna(),
+            ["latitude", "longitude"])
+
+    # SQ2b — latitude and longitude must not be zero (where non-null)
+    if "latitude" in mlos.columns and "longitude" in mlos.columns:
+        lat = pd.to_numeric(mlos["latitude"],  errors="coerce")
+        lon = pd.to_numeric(mlos["longitude"], errors="coerce")
+        has_value = lat.notna() & lon.notna()
+        add("SQ2b", "Latitude/Longitude — Not Zero",
+            "latitude and longitude must not be zero",
+            has_value & ((lat == 0) | (lon == 0)),
             ["latitude", "longitude"])
 
     # SQ3 — no two settlements may share identical coordinates (stacked)
@@ -1203,7 +1213,8 @@ with st.sidebar:
 | Rule | Check |
 |------|-------|
 | SQ1 | settlement_name must be unique within each ward_code |
-| SQ2 | latitude and longitude must be present and not equal to zero |
+| SQ2 | latitude and longitude must not be null or missing |
+| SQ2b | latitude and longitude must not be zero |
 | SQ3 | No two settlements may share identical coordinates (stacked) |
 | SQ4 | Every settlement must be > 30 m from every other settlement |
         """)

@@ -184,7 +184,8 @@ Spatial integrity checks applied to the MLoS settlement records.
 | Rule | Check | Description |
 |------|-------|-------------|
 | SQ1 | Duplicate Settlement Name in Ward | `settlement_name` must not repeat within the same `ward_code` |
-| SQ2 | Latitude/Longitude Filled and Non-Zero | `latitude` and `longitude` must be present and not equal to zero |
+| SQ2 | Latitude/Longitude — Not Null | `latitude` and `longitude` must not be null or missing |
+| SQ2b | Latitude/Longitude — Not Zero | `latitude` and `longitude` must not be zero (checked only on non-null rows) |
 | SQ3 | Stacked Coordinates | No two settlements may share identical `latitude`/`longitude` coordinates |
 | SQ4 | Settlements Too Close (< 30 m) | Every settlement must be more than 30 metres from all other settlements (Haversine distance) |
 
