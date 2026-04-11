@@ -95,7 +95,8 @@ VALID_ACC   = {"Fully Accessible","Partially Accessible","Inaccessible"}
 VALID_HAB   = {"Abandoned","Migrated","Inhabited","Partially Inhabited"}
 UUID_RE     = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 EDITOR_RE   = re.compile(r'^[a-z]+\.[a-z]+$')
-NULLABLE    = {"primarysettlement_name","alternate_name","reasons_for_inaccessibility"}
+# Nullable MLoS fields (can be null — not subject to null checks):
+# primarysettlement_name, alternate_name, reasons_for_inaccessibility
 YN_NA_COLS  = {"highrisk","slums","densely_populated","hard2reach","border",
                "normadic","riverine","fulani"}
 
@@ -719,15 +720,6 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
             "ward_code in MLoS must match wardcode in Takeoffpoint table",
             ~mlos["ward_code"].astype(str).str.strip().isin(valid), ["ward_code"])
 
-    # R5 – required fields not null
-    non_null = [c for c in mlos.columns
-                if c not in NULLABLE and
-                   c not in {"ROWID","ogc_fid","geom","fc_globalid","settlementarea_globalid"}]
-    null_mask = (mlos[non_null].isnull() | mlos[non_null].astype(str).eq("")).any(axis=1)
-    add("5","No Null in Required Fields",
-        "All fields except primarysettlement_name, alternate_name, reasons_for_inaccessibility must not be null",
-        null_mask)
-
     # R6
     if "security_compromised" in mlos.columns:
         add("6","Security Compromised Y/N",
@@ -1048,7 +1040,6 @@ with st.sidebar:
 | 2 | takeoffpoint == takeoffpoint.name |
 | 3 | takeoffpoint_code == takeoffpoint.code |
 | 4 | ward_code == takeoffpoint.wardcode |
-| 5 | Required fields not null |
 | 6 | security_compromised = Y/N |
 | 7 | accessibility_status valid |
 | 8 | Partial/Inaccessible requires reason |

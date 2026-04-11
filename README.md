@@ -104,13 +104,13 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `takeoffpoint` | Takeoffpoint name | Rules 2, TP2 |
 | `takeoffpoint_code` | Takeoffpoint code | Rules 3, TP3 |
 | `settlement_name` | Settlement name | Base identifier |
-| `primarysettlement_name` | Primary settlement name | Nullable |
-| `alternate_name` | Alternate settlement name | Nullable |
+| `primarysettlement_name` | Primary settlement name | Nullable (can be null) |
+| `alternate_name` | Alternate settlement name | Nullable (can be null) |
 | `latitude` | GPS latitude | Rule B2 |
 | `longitude` | GPS longitude | Rule B2 |
 | `security_compromised` | Y or N | Rule 6 |
 | `accessibility_status` | Fully Accessible / Partially Accessible / Inaccessible | Rules 7, 8 |
-| `reasons_for_inaccessibility` | Reason text | Rule 8, Auto Correct (Nullable — exempt from Rule 5) |
+| `reasons_for_inaccessibility` | Reason text | Rule 8, Auto Correct (Nullable — can be null for Fully Accessible settlements) |
 | `habitational_status` | Abandoned / Migrated / Inhabited / Partially Inhabited | Rule 9 |
 | `set_population` | Total settlement population | Rules 10, 11 |
 | `set_target` | Target count | Rule 10 |
@@ -157,7 +157,6 @@ Data integrity rules applied to the MLoS table.
 | 2 | Takeoffpoint Name Match | `takeoffpoint` must match `name` in the Takeoffpoint table |
 | 3 | Takeoffpoint Code Match | `takeoffpoint_code` must match `code` in the Takeoffpoint table |
 | 4 | Ward Code Match | `ward_code` must match `wardcode` in the Takeoffpoint table |
-| 5 | No Null in Required Fields | All required fields must not be null or empty (exempt: `primarysettlement_name`, `alternate_name`, `reasons_for_inaccessibility`) |
 | 6 | Security Compromised Y/N | `security_compromised` must be `Y` or `N` |
 | 7 | Accessibility Status Valid | Must be: `Fully Accessible`, `Partially Accessible`, or `Inaccessible` |
 | 8 | Reason for Inaccessibility Required | Partially/Inaccessible settlements must have a reason |
@@ -169,7 +168,7 @@ Data integrity rules applied to the MLoS table.
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-> Rules 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
+> Rules 5 (No Null in Required Fields), 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 5 was removed as null checks are not enforced — `primarysettlement_name`, `alternate_name`, and `reasons_for_inaccessibility` are explicitly nullable; Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
 
 ---
 
