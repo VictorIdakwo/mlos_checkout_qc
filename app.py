@@ -376,10 +376,18 @@ def load_boundary_refs():
 # ─── QC Engine — Ward Boundary ───────────────────────────────────────────────────
 def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.DataFrame):
     checks, details = [], []
+    total = len(mlos)
+
     if "ward_code" not in mlos.columns:
+        checks.append({
+            "Rule#": "B0", "QC Check": "Ward Code — Not Available on Data",
+            "Description": "ward_code column is missing from the uploaded data — all boundary checks skipped",
+            "Failing Rows": total, "Total Rows": total,
+            "Fail %": "100.0%",
+            "Status": "❌ FAIL",
+        })
         return checks, pd.DataFrame()
 
-    total  = len(mlos)
     id_col = "ogc_fid" if "ogc_fid" in mlos.columns else mlos.columns[0]
     BASE   = [c for c in [id_col,"state_name","lga_name","ward_code","settlement_name"] if c in mlos.columns]
 
@@ -1452,11 +1460,11 @@ with tab4:
 
 # ── Tab 5: Boundary Issues ────────────────────────────────────────────────────────
 with tab5:
-    if boundary_detail.empty:
+    n_b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
+    if n_b_fail == 0:
         st.success("✅ All ward codes match the boundary reference and all coordinates fall within their declared ward boundaries.")
     else:
-        n_b_fail = sum(1 for c in boundary_checks if "FAIL" in c["Status"])
-        st.error(f"❌ **{boundary_fail_rows:,} issue row(s)** across **{n_b_fail} boundary check(s)**")
+        st.error(f"❌ **{n_b_fail} boundary check(s) failing** — {boundary_fail_rows:,} issue row(s)")
 
         for check in boundary_checks:
             if "FAIL" not in check["Status"]: continue
@@ -1467,9 +1475,12 @@ with tab5:
                 st.caption(f"📌 {check['Description']}")
                 st.dataframe(subset, use_container_width=True, hide_index=True)
 
-        st.markdown("---")
-        st.markdown("**📋 All Boundary Issue Rows (combined)**")
-        st.caption("Includes `ward_code` from the uploaded file and the matched value from the boundary reference for comparison.")
+        if boundary_detail.empty:
+            st.info("ℹ️ No row-level detail available for the failing boundary check(s) above.")
+        else:
+            st.markdown("---")
+            st.markdown("**📋 All Boundary Issue Rows (combined)**")
+            st.caption("Includes `ward_code` from the uploaded file and the matched value from the boundary reference for comparison.")
 
         # Enrich boundary detail with boundary reference ward_code for comparison
         enriched_detail = boundary_detail.copy()
