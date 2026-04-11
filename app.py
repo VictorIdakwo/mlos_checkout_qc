@@ -424,12 +424,20 @@ def run_ward_boundary_qc(mlos: pd.DataFrame, ref_df: pd.DataFrame, bbox_df: pd.D
         filtered_ref  = ref_df.copy()
         filtered_bbox = bbox_df.copy()
 
-    # B1 — ward_code must exist in the state-name-filtered boundary reference
+    # B0 — ward_code must not be null or empty in the uploaded data
+    null_wc_mask = mlos["ward_code"].isna() | mlos["ward_code"].astype(str).str.strip().eq("")
+    add("B0", "Ward Code — Not Available on Data",
+        "ward_code is null or empty on the uploaded data",
+        null_wc_mask, ["ward_code"])
+
+    # B1 — non-null ward_codes must exist in the state-name-filtered boundary reference
     if not filtered_ref.empty and "ward_code" in filtered_ref.columns:
-        valid_wards = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
+        valid_wards   = set(filtered_ref["ward_code"].dropna().astype(str).str.strip())
+        has_wc        = ~null_wc_mask   # only check rows that actually have a ward_code
+        not_in_ref    = ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards)
         add("B1", "Ward Code — Boundary Reference",
             "ward_code must exist in the admin ward boundary reference for the file's state(s)",
-            ~mlos["ward_code"].astype(str).str.strip().isin(valid_wards),
+            has_wc & not_in_ref,
             ["ward_code"])
 
     # B3 — state_name in MLoS must match the state_name the boundary reference
@@ -784,17 +792,6 @@ def run_mlos_qc(mlos: pd.DataFrame, takeoff: pd.DataFrame):
                 f"{col} must be Y, N, or NA",
                 ~mlos[col].astype(str).str.strip().isin(VALID_YN_NA), [col])
 
-    # R14t — team_code must be numeric
-    if "team_code" in mlos.columns:
-        numeric_mask = pd.to_numeric(
-            mlos["team_code"].astype(str).str.strip(), errors="coerce"
-        ).isna() & mlos["team_code"].notna() & (
-            mlos["team_code"].astype(str).str.strip() != ""
-        )
-        add("14t", "team_code is numeric",
-            "team_code must be a numeric value",
-            numeric_mask, ["team_code"])
-
     # R16
     if "editor" in mlos.columns:
         add("16","Editor Format (firstname.surname)",
@@ -1052,7 +1049,6 @@ with st.sidebar:
 | 11 | number_of_houses ≤ set_population |
 | 13 | urban/rural/scattered = Y/N (no conflict) |
 | 14 | Profile flags = Y/N/NA (highrisk, slums, densely_populated, hard2reach, border, normadic, riverine, fulani) |
-| 14t | team_code must be numeric |
 | 16 | editor = firstname.surname (lowercase) |
 | 17 | globalid = valid UUID |
         """)
@@ -1069,6 +1065,7 @@ with st.sidebar:
         st.markdown("""
 | Rule | Check |
 |------|-------|
+| B0 | ward_code is not null/empty on the uploaded data |
 | B1 | ward_code exists in admin ward boundary reference (9,410 wards) |
 | B2 | latitude/longitude falls within the bounding box of the declared ward_code |
 | B3 | state_name in MLoS matches the state_name assigned to that ward_code in the boundary reference |

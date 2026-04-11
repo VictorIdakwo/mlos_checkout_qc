@@ -116,7 +116,7 @@ Checks whether the uploaded file contains all required columns. Schema failures 
 | `set_target` | Target count | Rule 10 |
 | `number_of_houses` | House count | Rule 11 |
 | `noncompliant_household` | Non-compliant household count | Base field |
-| `team_code` | Team code (must be numeric) | Rule 14t |
+| `team_code` | Team code (varchar) | Base field |
 | `day_of_activity` | Day of activity | Base field |
 | `urban` | Y or N | Rule 13 |
 | `rural` | Y or N | Rule 13 |
@@ -166,11 +166,10 @@ Data integrity rules applied to the MLoS table.
 | 11 | number_of_houses ≤ set_population | `number_of_houses` must not exceed `set_population` |
 | 13 | Urban / Rural / Scattered Y/N | Each must be `Y` or `N`; cannot be both Urban and Rural, or Urban and Scattered |
 | 14 | Profile Flags Y/N/NA | `highrisk`, `slums`, `densely_populated`, `hard2reach`, `border`, `normadic`, `riverine`, `fulani` must be `Y`, `N`, or `NA` |
-| 14t | team_code is Numeric | `team_code` must be a numeric value |
 | 16 | Editor Format | `editor` must follow the format `firstname.surname` (all lowercase) |
 | 17 | GlobalID is UUID | `globalid` must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 
-> Rules 12 (Day of Activity) and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
+> Rules 12 (Day of Activity), 14t (team_code numeric), and 15 (Source = MLoS) have been removed. Rule 12 was dropped as a QC requirement; Rule 14t was removed as `team_code` is a varchar field; Rule 15 is handled by Auto Correct (`source` NULL → `IE`).
 
 ---
 
@@ -195,7 +194,8 @@ Spatial and reference validation against the admin ward boundary dataset (9,410 
 
 | Rule | Check | Description |
 |------|-------|-------------|
-| B1 | Ward Code — Boundary Reference | `ward_code` must exist in the boundary reference for the file's state(s) |
+| B0 | Ward Code — Not Available on Data | `ward_code` is null or empty in the uploaded data |
+| B1 | Ward Code — Boundary Reference | `ward_code` must exist in the boundary reference for the file's state(s) (only checked for rows with a non-null ward_code) |
 | B2 | Coordinates — Within Ward Boundary | `latitude`/`longitude` must fall within the bounding box of the declared `ward_code` |
 | B3 | State Name — Boundary Reference Match | `state_name` in MLoS must match the `state_name` the boundary reference assigns to the same `ward_code` |
 
