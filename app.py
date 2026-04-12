@@ -1472,16 +1472,14 @@ weighted_score   = schema_score + mlos_score + settlement_score + tp_score + bou
 # ─── FILE INFO + METRICS ──────────────────────────────────────────────────────────
 st.success(f"✅ Loaded **{filename}** — MLoS: **{len(mlos_df):,} rows** | Takeoffpoint: **{len(takeoff_df):,} rows**")
 
-c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(9)
-c1.metric("📄 MLoS Rows",       f"{len(mlos_df):,}")
-c2.metric("📍 TP Rows",          f"{len(takeoff_df):,}")
-c3.metric("🔍 Checks Run",       f"{len(all_checks)}")
-c4.metric("✅ Passing",          f"{n_pass}")
-c5.metric("❌ Failing",          f"{n_fail}")
-c6.metric("⚠️ Issue Rows",      f"{mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
-c7.metric("📈 Pass Rate",        pct_pass)
-c8.metric("📉 Fail Rate",        pct_fail)
-c9.metric("🏆 Weighted Score",   f"{weighted_score:.1f}%")
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+c1.metric("📄 MLoS Rows",     f"{len(mlos_df):,}")
+c2.metric("🔍 Checks Run",    f"{len(all_checks)}")
+c3.metric("✅ Passing",       f"{n_pass}")
+c4.metric("❌ Failing",       f"{n_fail}")
+c5.metric("⚠️ Issue Rows",   f"{mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows:,}")
+c6.metric("📈 Pass Rate",     pct_pass)
+c7.metric("🏆 Weighted Score", f"{weighted_score:.1f}%")
 
 st.markdown("---")
 
