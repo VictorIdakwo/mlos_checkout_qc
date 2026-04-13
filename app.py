@@ -9,6 +9,14 @@ from datetime import datetime
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+import json
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
 
 # ─── Page Config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -99,6 +107,132 @@ EDITOR_RE   = re.compile(r'^[a-z]+\.[a-z]+$')
 # primarysettlement_name, alternate_name, reasons_for_inaccessibility
 YN_NA_COLS  = {"highrisk","slums","densely_populated","hard2reach","border",
                "nomadic","riverine","fulani"}
+
+# ─── Usage Tracking Database ─────────────────────────────────────────────────────
+USAGE_DB_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage_log.db")
+ADMIN_USERNAME = "ehadataanalytics"
+ADMIN_PASSWORD = "eha12345"
+
+GSHEET_ID = "1Uas1ewsIH_CS8_I5cw8akFrMZaM2XgFD5vTifgI2ZhA"
+GSHEET_HEADERS = [
+    "timestamp", "filename", "state_name", "lga_names", "file_format",
+    "mlos_rows", "takeoff_rows", "total_checks", "checks_passing",
+    "checks_failing", "weighted_score", "qc_layers", "issue_rows",
+]
+
+def _get_gsheet_client():
+    """Return an authorised gspread client using Streamlit secrets."""
+    if not GSPREAD_AVAILABLE:
+        return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+def _get_usage_worksheet(client):
+    """Open the first worksheet and ensure headers are present."""
+    spreadsheet = client.open_by_key(GSHEET_ID)
+    ws = spreadsheet.sheet1
+    # Ensure headers exist on row 1
+    row1 = ws.row_values(1)
+    if not row1 or row1[0] != GSHEET_HEADERS[0]:
+        ws.insert_row(GSHEET_HEADERS, index=1, value_input_option="RAW")
+    return ws
+
+def init_usage_db():
+    """Initialize the local SQLite usage tracking database."""
+    conn = sqlite3.connect(USAGE_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            state_name TEXT,
+            lga_names TEXT,
+            file_format TEXT,
+            mlos_rows INTEGER,
+            takeoff_rows INTEGER,
+            total_checks INTEGER,
+            checks_passing INTEGER,
+            checks_failing INTEGER,
+            weighted_score REAL,
+            qc_layers TEXT,
+            issue_rows INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def log_usage(filename, state_name, lga_names, file_format, mlos_rows, takeoff_rows,
+              total_checks, checks_passing, checks_failing, weighted_score, qc_layers, issue_rows):
+    """Log a QC run to local SQLite AND Google Sheets."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row_data = [ts, filename, state_name, lga_names, file_format,
+                mlos_rows, takeoff_rows, total_checks, checks_passing,
+                checks_failing, weighted_score, qc_layers, issue_rows]
+
+    # ── Local SQLite ─────────────────────────────────────────────────────────
+    try:
+        conn = sqlite3.connect(USAGE_DB_PATH)
+        conn.execute(
+            """INSERT INTO usage_log
+               (timestamp, filename, state_name, lga_names, file_format, mlos_rows, takeoff_rows,
+                total_checks, checks_passing, checks_failing, weighted_score, qc_layers, issue_rows)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            tuple(row_data),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+    # ── Google Sheets backup ─────────────────────────────────────────────────
+    try:
+        client = _get_gsheet_client()
+        if client:
+            ws = _get_usage_worksheet(client)
+            ws.append_row([str(v) for v in row_data], value_input_option="USER_ENTERED")
+    except Exception:
+        pass  # Don't break the app if Google Sheets is unavailable
+
+def get_usage_logs():
+    """Retrieve usage logs — Google Sheets first, local SQLite as fallback."""
+    # ── Try Google Sheets (persistent on Streamlit Cloud) ────────────────────
+    try:
+        client = _get_gsheet_client()
+        if client:
+            ws = _get_usage_worksheet(client)
+            records = ws.get_all_records()
+            if records:
+                df = pd.DataFrame(records)
+                # Cast numeric columns
+                for col in ["mlos_rows", "takeoff_rows", "total_checks",
+                            "checks_passing", "checks_failing", "issue_rows"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+                if "weighted_score" in df.columns:
+                    df["weighted_score"] = pd.to_numeric(df["weighted_score"], errors="coerce")
+                df["id"] = range(1, len(df) + 1)
+                return df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+    except Exception:
+        pass
+
+    # ── Fallback to local SQLite ─────────────────────────────────────────────
+    try:
+        conn = sqlite3.connect(USAGE_DB_PATH)
+        df = pd.read_sql_query("SELECT * FROM usage_log ORDER BY timestamp DESC", conn)
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+init_usage_db()
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────────
 def load_sqlite(uploaded_file):
@@ -1171,6 +1305,9 @@ def load_takeoffpoint_file(tp_file) -> pd.DataFrame:
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────────
 with st.sidebar:
+    app_mode = st.radio("Navigation", ["🏠 QC Tool", "🔐 Admin Panel"],
+                         key="app_mode", label_visibility="collapsed", horizontal=True)
+    st.markdown("---")
     st.markdown("### 📁 Upload Files")
 
     st.markdown("**MLoS Checkout File**")
@@ -1286,6 +1423,133 @@ st.markdown("""
   <p>Master List of Settlements — Quality Control Dashboard &nbsp;|&nbsp; Upload your files and click ▶️ Run QC to begin</p>
 </div>
 """, unsafe_allow_html=True)
+
+# ─── ADMIN PANEL ─────────────────────────────────────────────────────────────────
+if app_mode == "🔐 Admin Panel":
+    st.markdown('<div class="sec-title">🔐 Admin — Platform Usage Tracking</div>', unsafe_allow_html=True)
+
+    if not st.session_state.get("admin_authenticated", False):
+        st.info("🔒 **Login required** to access the admin panel.")
+        with st.form("admin_login_form"):
+            _adm_user = st.text_input("Username", placeholder="Enter admin username")
+            _adm_pass = st.text_input("Password", type="password", placeholder="Enter password")
+            _adm_submit = st.form_submit_button("🔓 Login", type="primary")
+        if _adm_submit:
+            if _adm_user == ADMIN_USERNAME and _adm_pass == ADMIN_PASSWORD:
+                st.session_state["admin_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ Invalid username or password.")
+    else:
+        _col_logout, _ = st.columns([1, 5])
+        with _col_logout:
+            if st.button("🔒 Logout", key="admin_logout_btn"):
+                st.session_state["admin_authenticated"] = False
+                st.rerun()
+
+        usage_df_admin = get_usage_logs()
+
+        if usage_df_admin.empty:
+            st.info("📊 No usage data recorded yet. Data is logged automatically each time a QC run completes.")
+        else:
+            # ── Summary Metrics
+            st.markdown('<div class="sec-title">📊 Usage Overview</div>', unsafe_allow_html=True)
+            _uc1, _uc2, _uc3, _uc4, _uc5 = st.columns(5)
+            _uc1.metric("Total QC Runs", f"{len(usage_df_admin):,}")
+            _uc2.metric("Unique Files", f"{usage_df_admin['filename'].nunique():,}")
+            _all_states = usage_df_admin["state_name"].dropna().str.split(", ").explode().str.strip()
+            _uc3.metric("Unique States", f"{_all_states.nunique():,}")
+            _uc4.metric("Avg Score", f"{usage_df_admin['weighted_score'].mean():.1f}%")
+            _uc5.metric("Total Rows Checked", f"{usage_df_admin['mlos_rows'].sum():,}")
+
+            st.markdown("---")
+
+            # ── Filters
+            st.markdown('<div class="sec-title">🔍 Filter Logs</div>', unsafe_allow_html=True)
+            _afc1, _afc2, _afc3 = st.columns(3)
+            with _afc1:
+                _unique_states = sorted(_all_states.dropna().unique().tolist())
+                _state_flt = st.selectbox("State", ["All"] + _unique_states, key="adm_state_flt")
+            with _afc2:
+                _unique_formats = sorted(usage_df_admin["file_format"].dropna().unique().tolist())
+                _fmt_flt = st.selectbox("File Format", ["All"] + _unique_formats, key="adm_fmt_flt")
+            with _afc3:
+                _date_flt = st.date_input("Date Range", value=[], key="adm_date_flt")
+
+            _filt = usage_df_admin.copy()
+            if _state_flt != "All":
+                _filt = _filt[_filt["state_name"].str.contains(_state_flt, na=False)]
+            if _fmt_flt != "All":
+                _filt = _filt[_filt["file_format"] == _fmt_flt]
+            if _date_flt and len(_date_flt) == 2:
+                _filt["_dt"] = pd.to_datetime(_filt["timestamp"]).dt.date
+                _filt = _filt[(_filt["_dt"] >= _date_flt[0]) & (_filt["_dt"] <= _date_flt[1])]
+                _filt = _filt.drop(columns=["_dt"])
+
+            st.markdown("---")
+
+            # ── Charts
+            _chart_t1, _chart_t2, _chart_t3 = st.tabs(["📈 Over Time", "🗺️ By State", "📁 By Format"])
+
+            with _chart_t1:
+                _cd = _filt.copy()
+                _cd["date"] = pd.to_datetime(_cd["timestamp"]).dt.date
+                _daily = _cd.groupby("date").agg(
+                    QC_Runs=("id", "count"),
+                    Avg_Score=("weighted_score", "mean"),
+                    Total_Rows=("mlos_rows", "sum"),
+                ).reset_index()
+                st.bar_chart(_daily.set_index("date")[["QC_Runs"]], use_container_width=True)
+                st.caption("Daily QC run count")
+
+            with _chart_t2:
+                _sc = (
+                    _filt["state_name"].dropna()
+                    .str.split(", ").explode().str.strip()
+                    .value_counts().reset_index()
+                )
+                _sc.columns = ["State", "QC Runs"]
+                st.bar_chart(_sc.set_index("State"), use_container_width=True)
+                st.caption("QC runs per state")
+
+            with _chart_t3:
+                _fcc = _filt["file_format"].value_counts().reset_index()
+                _fcc.columns = ["Format", "QC Runs"]
+                st.bar_chart(_fcc.set_index("Format"), use_container_width=True)
+                st.caption("QC runs per file format")
+
+            st.markdown("---")
+
+            # ── Full Log Table
+            st.markdown('<div class="sec-title">📋 Full Usage Log</div>', unsafe_allow_html=True)
+            _disp_cols = ["timestamp", "filename", "state_name", "file_format", "mlos_rows",
+                          "takeoff_rows", "total_checks", "checks_passing", "checks_failing",
+                          "weighted_score", "issue_rows", "qc_layers"]
+            _avail = [c for c in _disp_cols if c in _filt.columns]
+            st.dataframe(
+                _filt[_avail].rename(columns={
+                    "timestamp": "Timestamp", "filename": "File", "state_name": "State(s)",
+                    "file_format": "Format", "mlos_rows": "MLoS Rows", "takeoff_rows": "TP Rows",
+                    "total_checks": "Checks", "checks_passing": "Pass", "checks_failing": "Fail",
+                    "weighted_score": "Score %", "issue_rows": "Issue Rows", "qc_layers": "QC Layers",
+                }),
+                use_container_width=True, hide_index=True, height=420,
+            )
+
+            # ── Download
+            _buf_usage = BytesIO()
+            with pd.ExcelWriter(_buf_usage, engine="openpyxl") as _xw:
+                _filt.drop(columns=["id"], errors="ignore").to_excel(
+                    _xw, sheet_name="Usage Log", index=False)
+            st.download_button(
+                "⬇️ Download Usage Log (Excel)",
+                data=_buf_usage.getvalue(),
+                file_name=f"mlos_qc_usage_log_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_usage_log",
+            )
+
+    st.stop()
 
 if not uploaded:
     st.info("👈 **Upload your MLoS file** (and optionally a Takeoffpoint file) using the sidebar, then click **▶️ Run QC**.")
@@ -1468,6 +1732,36 @@ settlement_score = _layer_pass_rate(settlement_checks) * LAYER_WEIGHTS["settleme
 tp_score         = _layer_pass_rate(tp_checks)       * LAYER_WEIGHTS["tp"]         * 100
 boundary_score   = _layer_pass_rate(boundary_checks) * LAYER_WEIGHTS["boundary"]   * 100
 weighted_score   = schema_score + mlos_score + settlement_score + tp_score + boundary_score
+
+# ─── LOG USAGE ────────────────────────────────────────────────────────────────────
+_usage_log_key = f"usage_logged_{qc_cache_key}"
+if not st.session_state.get(_usage_log_key, False):
+    _log_states = ", ".join(sorted(mlos_df["state_name"].dropna().unique().tolist())) \
+                  if "state_name" in mlos_df.columns else "N/A"
+    _log_lgas   = ", ".join(sorted(mlos_df["lga_name"].dropna().unique().tolist())) \
+                  if "lga_name" in mlos_df.columns else "N/A"
+    _log_ext    = filename.rsplit(".", 1)[-1].lower() if "." in filename else "unknown"
+    _log_layers = []
+    if schema_checks:     _log_layers.append("Schema")
+    if mlos_checks:       _log_layers.append("MLoS")
+    if settlement_checks: _log_layers.append("Settlement")
+    if tp_checks:         _log_layers.append("Takeoffpoint")
+    if boundary_checks:   _log_layers.append("Boundary")
+    log_usage(
+        filename=filename,
+        state_name=_log_states,
+        lga_names=_log_lgas,
+        file_format=_log_ext,
+        mlos_rows=len(mlos_df),
+        takeoff_rows=len(takeoff_df),
+        total_checks=len(all_checks),
+        checks_passing=n_pass,
+        checks_failing=n_fail,
+        weighted_score=round(weighted_score, 1),
+        qc_layers=", ".join(_log_layers),
+        issue_rows=mlos_fail_rows + settlement_fail_rows + tp_fail_rows + boundary_fail_rows,
+    )
+    st.session_state[_usage_log_key] = True
 
 # ─── FILE INFO + METRICS ──────────────────────────────────────────────────────────
 st.success(f"✅ Loaded **{filename}** — MLoS: **{len(mlos_df):,} rows** | Takeoffpoint: **{len(takeoff_df):,} rows**")
